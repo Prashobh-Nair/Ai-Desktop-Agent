@@ -1,0 +1,25 @@
+# Python virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Large Model Binaries (>100MB exceed GitHub limits, auto-downloaded on first run)
+stt-engine/models/
+*.bin
+*.safetensors
+
+# Temporary mic recordings
+samples/mic_input.wav
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

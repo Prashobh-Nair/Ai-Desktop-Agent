@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+models/whisper-small/*.bin
+models/whisper-small/*.safetensors
+*.wav
+*.mp3
+.DS_Store
+
