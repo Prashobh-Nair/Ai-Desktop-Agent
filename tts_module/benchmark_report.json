@@ -1,0 +1,108 @@
+{
+  "timestamp": "2026-11-02 12:47:19",
+  "hardware": {
+    "total_system_ram_gb": 31.61,
+    "available_ram_gb": 18.27,
+    "cpu_cores_logical": 12,
+    "cpu_cores_physical": 6
+  },
+  "model": {
+    "name": "Kokoro-82M (ONNX Runtime v1.0)",
+    "parameters": "82 Million",
+    "model_ram_footprint_mb": 340.98,
+    "load_time_sec": 2.22
+  },
+  "metrics_summary": {
+    "total_audio_duration_sec": 60.02,
+    "total_generation_time_sec": 33.91,
+    "average_rtf": 0.565,
+    "average_cache_latency_ms": 5637.81,
+    "status": "PASS - Faster than real-time (RTF < 1.0)"
+  },
+  "test_cases": [
+    {
+      "index": 1,
+      "category": "Short Command",
+      "char_count": 30,
+      "word_count": 3,
+      "voice": "af_heart",
+      "audio_duration_sec": 1.9,
+      "gen_time_sec": 1.3566923141479492,
+      "rtf": 0.707,
+      "cache_time_ms": 1123.78,
+      "cpu_percent": 494.4,
+      "ram_mb": 450.0,
+      "file_size_kb": 89.0
+    },
+    {
+      "index": 2,
+      "category": "Question",
+      "char_count": 97,
+      "word_count": 19,
+      "voice": "af_heart",
+      "audio_duration_sec": 5.46,
+      "gen_time_sec": 2.9257614612579346,
+      "rtf": 0.535,
+      "cache_time_ms": 3277.93,
+      "cpu_percent": 564.3,
+      "ram_mb": 530.6,
+      "file_size_kb": 256.0
+    },
+    {
+      "index": 3,
+      "category": "Numbers & Currency",
+      "char_count": 106,
+      "word_count": 16,
+      "voice": "am_adam",
+      "audio_duration_sec": 12.78,
+      "gen_time_sec": 7.0414135456085205,
+      "rtf": 0.55,
+      "cache_time_ms": 7319.63,
+      "cpu_percent": 555.6,
+      "ram_mb": 735.1,
+      "file_size_kb": 599.0
+    },
+    {
+      "index": 4,
+      "category": "Technical Command",
+      "char_count": 83,
+      "word_count": 18,
+      "voice": "am_adam",
+      "audio_duration_sec": 8.68,
+      "gen_time_sec": 4.9078991413116455,
+      "rtf": 0.565,
+      "cache_time_ms": 5042.7,
+      "cpu_percent": 561.1,
+      "ram_mb": 893.6,
+      "file_size_kb": 407.0
+    },
+    {
+      "index": 5,
+      "category": "Long Response",
+      "char_count": 385,
+      "word_count": 49,
+      "voice": "af_heart",
+      "audio_duration_sec": 26.78,
+      "gen_time_sec": 14.747326135635376,
+      "rtf": 0.55,
+      "cache_time_ms": 14430.69,
+      "cpu_percent": 548.6,
+      "ram_mb": 898.0,
+      "file_size_kb": 1255.4
+    },
+    {
+      "index": 6,
+      "category": "Complex Punctuation",
+      "char_count": 68,
+      "word_count": 11,
+      "voice": "bf_emma",
+      "audio_duration_sec": 4.42,
+      "gen_time_sec": 2.9326260089874268,
+      "rtf": 0.664,
+      "cache_time_ms": 2632.16,
+      "cpu_percent": 545.4,
+      "ram_mb": 1211.6,
+      "file_size_kb": 207.0
+    }
+  ]
+}

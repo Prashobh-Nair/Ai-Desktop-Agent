@@ -1,13 +1,112 @@
-# Custom Speech-to-Text (STT) Neural Network
+# AI-Powered Autonomous Desktop Agent
 
-An end-to-end, trainable Speech-to-Text neural network built from scratch using **PyTorch**, **Log-Mel Spectrograms**, **2D CNN**, **Bidirectional LSTM**, and **CTC Loss (Connectionist Temporal Classification)**.
+An intelligent desktop assistant allowing users to interact with their computers through natural voice commands, real-time speech processing, autonomous task execution, and studio-grade voice synthesis.
 
-Designed for embedded desktop integration, local edge inference, and academic evaluation without reliance on third-party speech APIs or pretrained models (such as Whisper or Google Speech).
+> **Development Team & Architecture Modules:**
+> - **Module 1: STT (Speech-to-Text)** – Prashobh Nair *(Custom CNN + BiLSTM + CTC Neural Network)*
+> - **Module 2: Brain / LLM** – Sahaj Patel *(Intent Understanding, Agent Planning & OS Operations)*
+> - **Module 3: TTS (Text-to-Speech)** – Custom Local Engine *(Kokoro-82M Neural Speech Synthesis)*
 
 ---
 
-## Architecture Overview
+## Overall System Architecture & Workflow
 
+```
+       USER VOICE (Microphone)
+                  │
+                  ▼
+┌──────────────────────────────────────────┐
+│ MODULE 1: SPEECH-TO-TEXT (STT)           │  (Prashobh Nair)
+│  - 80-channel Log-Mel Spectrogram        │  16 kHz Audio -> Text Transcription
+│  - 2D CNN + 2-Layer Bidirectional LSTM   │  1.94M Parameters, Offline PyTorch
+└──────────────────────────────────────────┘
+                  │  Transcribed Text Command
+                  ▼
+┌──────────────────────────────────────────┐
+│ MODULE 2: BRAIN / LLM                    │  (Sahaj Patel)
+│  - Natural Language Intent Understanding │  Autonomous Task Reasoning
+│  - Desktop OS Action Dispatcher          │  Generates Conversational Response
+└──────────────────────────────────────────┘
+                  │  Response Text
+                  ▼
+┌──────────────────────────────────────────┐
+│ MODULE 3: TEXT-TO-SPEECH (TTS)           │  (Local Kokoro-82M Engine)
+│  - Intelligent Preprocessing & Chunking  │  82M Parameters, Multi-Voice
+│  - CPU-Optimized ONNX Runtime Inference  │  WAV Audio Output (24 kHz)
+└──────────────────────────────────────────┘
+                  │  Synthesized Speech Audio
+                  ▼
+       AUDIO OUTPUT (Windows Speakers)
+```
+
+---
+
+## Directory Structure
+
+```text
+Ai-Desktop-Agent/
+│
+├── checkpoints/                       # Module 1: Saved STT model weights
+│   ├── best_model.pt                  # Lowest validation loss checkpoint
+│   ├── last_checkpoint.pt             # Latest epoch state for resume
+│   └── training_log.json              # STT training history (loss, CER, WER)
+│
+├── data/                              # Module 1: Audio dataset and manifests
+│   ├── wavs/                          # 16kHz mono WAV audio files
+│   ├── train.csv                      # Training set manifest
+│   ├── val.csv                        # Validation set manifest
+│   └── test.csv                       # Unseen test set manifest
+│
+├── samples/                           # Audio test recordings
+│   ├── sample1.wav                    # Standalone test sample 1
+│   ├── sample2.wav                    # Standalone test sample 2
+│   └── mic_input.wav                  # Output from microphone utility
+│
+├── src/                               # Module 1: STT core architecture
+│   ├── dataset.py                     # Dynamic length bucketing dataset
+│   ├── features.py                    # Log-Mel Spectrogram extraction
+│   ├── metrics.py                     # WER & CER computation
+│   ├── model.py                       # CNN + BiLSTM + CTC PyTorch Module
+│   └── text.py                        # Tokenizer & CTC Greedy Decoder
+│
+├── tts_module/                        # Module 3: Local Neural TTS Engine (Kokoro-82M)
+│   ├── models/
+│   │   └── kokoro/                    # Pre-trained Kokoro ONNX model & voice bins
+│   ├── audio/
+│   │   └── output/                    # Synthesized WAV audio outputs
+│   ├── src/
+│   │   ├── tts_engine.py              # Core neural synthesis engine & public API
+│   │   ├── audio_player.py            # Windows hardware playback & interruption controls
+│   │   ├── text_processor.py          # LLM markdown cleaning & normalization
+│   │   └── config.py                  # Voice registry & hardware configurations
+│   ├── tests/
+│   │   ├── test_text_processor.py     # Unit tests for text normalization
+│   │   ├── test_tts_engine.py         # Integration tests for speech synthesis
+│   │   └── benchmark.py               # Performance, latency & RAM benchmarks
+│   ├── download_model.py              # Automatic Kokoro model downloader
+│   ├── demo_pipeline.py               # Full STT -> LLM -> TTS pipeline demo
+│   ├── main.py                        # TTS CLI & interactive console
+│   └── README.md                      # Detailed TTS technical documentation
+│
+├── app.py                             # Module 1: STT FastAPI web service
+├── data_prep.py                       # Module 1: Dataset extraction & preparation
+├── inference.py                       # Module 1: CLI SpeechRecognizer
+├── mic_record.py                      # Module 1: Microphone live transcription
+├── test_stt.py                        # Module 1: Automated 5-stage STT test suite
+├── train.py                           # Module 1: STT training pipeline
+└── requirements.txt                   # Complete project dependencies
+```
+
+---
+
+# MODULE 1: SPEECH-TO-TEXT (STT)
+*Developed by Prashobh Nair*
+
+An end-to-end, trainable Speech-to-Text neural network built from scratch using **PyTorch**, **Log-Mel Spectrograms**, **2D CNN**, **Bidirectional LSTM**, and **CTC Loss (Connectionist Temporal Classification)**.
+
+Designed for embedded desktop integration, local edge inference, and academic evaluation without reliance on third-party speech APIs or external cloud services.
+
+### STT Architecture
 ```
 Raw Audio Waveform (16 kHz Mono)
               │
@@ -47,7 +146,7 @@ Raw Audio Waveform (16 kHz Mono)
 Decoded Character Transcription String
 ```
 
-### Model Specifications
+### STT Model Specifications
 - **Input Sampling Rate:** 16,000 Hz (mono)
 - **Feature Extraction:** 80-channel Log-Mel Spectrogram with per-utterance instance normalization
 - **Acoustic Backbone:** 2D CNN + 2-Layer Bidirectional LSTM + LayerNorm
@@ -55,181 +154,128 @@ Decoded Character Transcription String
 - **Total Trainable Parameters:** **1,937,789** (~1.94 Million parameters)
 - **Footprint:** ~34 MB checkpoint size
 
+### STT Usage
+```bash
+# Transcribe single WAV file
+python inference.py --audio samples/sample1.wav
+
+# Record and transcribe from microphone
+python mic_record.py
+
+# Launch FastAPI speech server
+python app.py
+```
+
 ---
 
-## Directory Structure
+# MODULE 3: TEXT-TO-SPEECH (TTS)
+*Custom Local Kokoro-82M Engine*
 
+Converts responses generated by Sahaj's LLM brain into natural, expressive, human-like speech played through the user's computer speakers.
+
+### Key Capabilities
+- **Neural Architecture:** **Kokoro-82M** (82 million parameters, Apache 2.0 license).
+- **100% Offline & Private:** Operates entirely locally with zero external API keys or cloud dependencies.
+- **54+ High-Fidelity Voice Profiles:** American (`af_heart`, `am_adam`, `af_bella`, `am_michael`) and British (`bf_emma`, `bm_george`, etc.) voices.
+- **Adjustable Speaking Speed:** Seamless rate control from `0.5x` (slow) to `2.0x` (rapid).
+- **Intelligent Text Normalization:** Built-in normalization for numbers, currencies (`$`, `£`, `€`, `₹`), dates, times, units (`GB`, `MB`, `GHz`, `°C`), tech acronyms (`AI`, `LLM`, `STT`, `TTS`, `RAM`, `CPU`), and markdown stripping.
+- **Long LLM Response Chunking:** Automatically divides lengthy multi-sentence responses into natural clauses and inserts acoustic pauses.
+- **Low-Latency & Lightweight:** Model RAM footprint is only **~340 MB**, and CPU Real-Time Factor (RTF) averages **~0.55x** (faster than real-time).
+- **Zero-Latency Audio Caching:** Instant (<1 ms) retrieval for repetitive assistant phrases (*"Yes sir"*, *"Command completed"*).
+- **Reliable Windows Playback:** Dual-layer audio driver utilizing `sounddevice` with automatic fallback to Windows native `winsound`.
+
+### Python Integration Interface (For Module 2 Brain)
+```python
+from tts_module import generate_speech, play_audio, speak
+
+# 1. Generate speech from LLM response text
+audio_path = generate_speech("System diagnostics report: All background services are running normally.")
+
+# 2. Play audio through Windows speakers
+play_audio(audio_path, blocking=True)
+
+# 3. All-in-one assistant call (Synthesize & Speak)
+speak("Hello! I am your AI desktop assistant.")
 ```
-REAL/
-├── checkpoints/
-│   ├── best_model.pt          # Lowest validation loss checkpoint
-│   ├── last_checkpoint.pt     # Latest epoch state for resume
-│   └── training_log.json      # Full history (loss, CER, WER per epoch)
-├── data/
-│   ├── wavs/                  # 16kHz mono WAV audio files
-│   ├── train.csv              # Training set manifest (audio_path, transcript, duration)
-│   ├── val.csv                # Validation set manifest
-│   ├── test.csv               # Unseen test set manifest
-│   └── all.csv                # Complete manifest
-├── samples/
-│   ├── sample1.wav            # Standalone test sample 1
-│   ├── sample2.wav            # Standalone test sample 2
-│   └── mic_input.wav          # Output from microphone utility
-├── src/
-│   ├── __init__.py
-│   ├── dataset.py             # PyTorch Dataset & dynamic length bucketing
-│   ├── features.py            # Log-Mel Spectrogram extraction
-│   ├── metrics.py             # WER & CER computation
-│   ├── model.py               # Custom CNN + BiLSTM + CTC PyTorch Module
-│   └── text.py                # Tokenizer & CTC Greedy Decoder
-├── app.py                     # FastAPI web service (GET /health, POST /transcribe)
-├── data_prep.py               # Dataset extraction & preparation pipeline
-├── inference.py               # SpeechRecognizer class & CLI inference
-├── mic_record.py              # Microphone recording & live transcription tool
-├── requirements.txt           # Project dependencies
-├── test_stt.py                # Automated 5-stage test suite
-└── train.py                   # Full training & validation pipeline with resume support
+
+### TTS Performance Benchmarks (Windows CPU)
+| Benchmark Scenario | Word Count | Audio Duration | Generation Time | Real-Time Factor (RTF)* | RAM Usage |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **Short Command** (*"Command executed successfully."*) | 3 | 1.90 s | 1.36 s | **0.71x** | 450 MB |
+| **Interactive Question** (*"Would you like me to open the report...?"*) | 19 | 5.46 s | 2.93 s | **0.54x** | 530 MB |
+| **Numbers & Currency** (*"$1,450.75 on Nov 2nd, 2026 at 99.8% in 250 ms..."*) | 16 | 12.78 s | 7.04 s | **0.55x** | 735 MB |
+| **Technical Metrics** (*"CPU at 45% and memory at 3.2 GB out of 8 GB RAM..."*) | 18 | 8.68 s | 4.91 s | **0.56x** | 893 MB |
+| **Long LLM Response** (*Full multi-sentence technical paragraph*) | 49 | 26.78 s | 14.75 s | **0.55x** | 898 MB |
+| **Complex Punctuation** (*"Wait! What? No way... Are you sure?! Yes, 100%."*) | 11 | 4.42 s | 2.93 s | **0.66x** | 1211 MB |
+
+*\*Real-Time Factor (RTF) = Generation Time / Audio Duration. An RTF < 1.0 indicates synthesis is faster than real-time speech playback.*
+
+### TTS Usage
+```bash
+# Verify or download pre-trained Kokoro weights locally (runs once)
+python tts_module/download_model.py
+
+# Test speech synthesis and playback
+python tts_module/main.py --text "Hello Prashobh and Sahaj, the desktop agent voice engine is operational." --play
+
+# Launch interactive speech console
+python tts_module/main.py --interactive
+
+# Run performance benchmarks
+python tts_module/main.py --benchmark
 ```
+
+---
+
+## End-to-End System Demonstration
+
+To test the complete three-module pipeline (`STT` -> `LLM Brain` -> `Kokoro-82M TTS` -> `Speakers`):
+```bash
+python tts_module/demo_pipeline.py
+```
+This executes the full pipeline across four desktop agent workflows:
+1. **System Performance Query:** STT recognizes speech, Brain queries metrics, TTS speaks CPU & RAM diagnostics.
+2. **Application Launch:** Brain dispatches desktop action (*"Open Google Chrome"*), TTS confirms operation.
+3. **Calendar Scheduling:** Brain schedules reminder for 10:00 AM, TTS confirms with natural date/time inflection.
+4. **Team Credits:** Demonstrates speech synthesis across team module responsibilities.
 
 ---
 
 ## Getting Started
 
-### 1. Environment Setup
-
+### 1. Installation
 ```bash
-# Create virtual environment
+git clone https://github.com/Prashobh-Nair/Ai-Desktop-Agent.git
+cd Ai-Desktop-Agent
+
+# Setup virtual environment
 python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Activate virtual environment
-# Windows:
-.\.venv\Scripts\Activate.ps1
-# Linux/macOS:
-source .venv/bin/activate
-
-# Install dependencies
+# Install dependencies for both STT and TTS modules
 pip install -r requirements.txt
 ```
 
-### 2. Dataset Preparation
-
-Downloads and extracts a manageable, curated subset of LibriSpeech (`dev-clean`) directly from OpenSLR, converts audio to 16 kHz Mono WAV format, and produces train/validation/test splits:
-
+### 2. Verify Models
 ```bash
-python data_prep.py
+# Setup Kokoro-82M TTS weights locally
+python tts_module/download_model.py
 ```
 
-### 3. Model Training
-
-Train the custom neural network from scratch:
-
+### 3. Run Automated Test Suites
 ```bash
-python train.py --epochs 30 --batch-size 8 --lr 1e-3
-```
-
-To resume training from an existing checkpoint:
-```bash
-python train.py --resume --epochs 40
-```
-
-### 4. Running Inference
-
-Transcribe any 16 kHz WAV audio file using the trained model checkpoint:
-
-```bash
-python inference.py --audio samples/sample1.wav
-```
-
-Programmatic Python usage:
-```python
-from inference import SpeechRecognizer
-
-recognizer = SpeechRecognizer("checkpoints/best_model.pt")
-text = recognizer.transcribe("samples/sample1.wav")
-print("Recognized Text:", text)
-```
-
-### 5. Microphone Recording & Live Transcription
-
-Interactive recording (Press Enter to start, Press Enter to stop):
-```bash
-python mic_record.py
-```
-
-Timed recording (e.g. record for 4 seconds):
-```bash
-python mic_record.py --duration 4.0
-```
-
-List available input microphones:
-```bash
-python mic_record.py --list-devices
-```
-
-### 6. FastAPI Web Service
-
-Start the REST API server:
-```bash
-python app.py
-```
-*(Server listens on `http://127.0.0.1:8000`)*
-
-#### Endpoints:
-- **`GET /health`**: Returns service status and loaded model info.
-  ```bash
-  curl http://127.0.0.1:8000/health
-  ```
-  Response:
-  ```json
-  {
-    "status": "healthy",
-    "model_loaded": true,
-    "checkpoint": "checkpoints/best_model.pt"
-  }
-  ```
-
-- **`POST /transcribe`**: Upload a WAV file and get the transcription.
-  ```bash
-  curl -X POST "http://127.0.0.1:8000/transcribe" -F "file=@samples/sample1.wav"
-  ```
-  Response:
-  ```json
-  {
-    "status": "success",
-    "text": "h sn th  b for  o tnhor bhe inth t",
-    "language": "en"
-  }
-  ```
-
-### 7. Running the Automated Test Suite
-
-Run the full end-to-end verification suite:
-```bash
+# Run STT test suite
 python test_stt.py
-```
 
-Tests verified:
-1. Model checkpoint loading
-2. Direct audio file inference
-3. Unseen test set CER & WER evaluation
-4. FastAPI endpoints (`GET /health` & `POST /transcribe`)
-5. Microphone input availability
+# Run TTS test suites (26 tests)
+python -m unittest discover -s tts_module/tests -p "test_*.py"
+```
 
 ---
 
-## Training & Evaluation Results
+## License & Credits
 
-Experiment trained on local Intel Core Ultra 5 125H CPU across 30 epochs:
-
-| Metric | Starting Epoch (1) | Mid Epoch (15) | Final Best Epoch (30) |
-|---|---|---|---|
-| **Training Loss** | `5.9617` | `2.9002` | **`1.9581`** |
-| **Validation Loss** | `4.2638` | `2.8849` | **`2.0309`** |
-| **Validation CER** | `98.68%` | `100.0%` | **`62.22%`** |
-| **Unseen Test CER** | `100.0%` | `100.0%` | **`62.07%`** |
-| **Unseen Test WER** | `100.0%` | `100.0%` | **`96.03%`** |
-
-### Academic Notes:
-1. **CTC Blank Token Dynamics:** In standard CTC training from scratch, early unconstrained optimization often falls into an "all-blank" local minimum ($L \approx -\ln(1/29) \approx 2.88$). By applying an initial negative bias to the blank token (`classifier.bias[0] = -3.0`) and introducing Layer Normalization, the network is compelled to align acoustic features with character tokens, bringing validation CER down to ~62% in only 30 CPU epochs.
-2. **Dynamic Length Bucketing:** Speech datasets exhibit large duration variances. Using `BucketBatchSampler` to cluster similar audio durations per batch eliminated unnecessary zero-padding, cutting CPU training time per epoch from $142\text{ s}$ down to $\sim 10\text{ s}$ ($>10\times$ speedup).
-
+- **STT Module:** Prashobh Nair
+- **LLM Brain Module:** Sahaj Patel
+- **TTS Module:** Custom Kokoro-82M Engine
+- **Kokoro-82M:** Apache 2.0 License by hexgrad

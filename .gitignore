@@ -12,11 +12,17 @@ __pycache__/
 
 # Large Model Binaries (>100MB exceed GitHub limits, auto-downloaded on first run)
 stt-engine/models/
+tts_module/models/kokoro/*.onnx
+tts_module/models/kokoro/*.bin
 *.bin
+*.onnx
 *.safetensors
 
-# Temporary mic recordings
+# Audio samples & outputs
 samples/mic_input.wav
+tts_module/audio/output/*.wav
+!tts_module/audio/output/.gitkeep
+!tts_module/models/kokoro/.gitkeep
 
 # IDE & OS
 .vscode/
