@@ -29,3 +29,4 @@ tts_module/audio/output/*.wav
 .idea/
 .DS_Store
 Thumbs.db
+
