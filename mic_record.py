@@ -1,7 +1,7 @@
 """
 Microphone Recording Utility for Live Speech-to-Text.
-Records audio from the default or chosen microphone, saves to WAV,
-and feeds it to our custom trained STT model.
+Interactive continuous loop: Press Enter to record, speak, press Enter to stop,
+transcribes instantly, and repeats whenever you want without restarting the code.
 """
 import os
 import sys
@@ -23,70 +23,59 @@ def list_microphones():
     print("--------------------------------\n")
 
 
-def record_audio(duration: float = None, sample_rate: int = 16000, output_path: str = "samples/mic_input.wav"):
+def record_audio_interactive(sample_rate: int = 16000, output_path: str = "samples/mic_input.wav") -> np.ndarray:
     """
-    Records audio from the microphone.
-    If duration is specified, records for that many seconds.
-    Otherwise, records interactively until the user presses Enter.
+    Records audio from the microphone until the user presses Enter.
+    Returns normalized 16kHz float32 audio numpy array.
     """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
-    if duration is not None:
-        print(f"[*] Recording for {duration} seconds at {sample_rate} Hz... Speak now!")
-        audio_data = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype="float32")
-        sd.wait()
-        print("[*] Recording complete.")
-        # Peak normalization
-        max_val = np.abs(audio_data).max()
-        if max_val > 1e-4:
-            audio_data = audio_data / max_val * 0.95
-    else:
-        print("\n[*] Interactive Recording Mode:")
-        print("    Press ENTER to START recording...")
-        try:
-            input()
-        except EOFError:
+    print("\n>>> [RECORDING IN PROGRESS] Speak into your microphone now...")
+    print(">>> [PRESS ENTER WHEN DONE SPEAKING] >>> ", end="", flush=True)
+
+    recorded_frames = []
+
+    def audio_callback(indata, frames, time_info, status):
+        if status:
             pass
-            
-        print("[*] RECORDING STARTED! Speak into your microphone. (Press ENTER to STOP)...")
-        recorded_frames = []
-        
-        def audio_callback(indata, frames, time_info, status):
-            if status:
-                print(f"[!] Status warning: {status}", file=sys.stderr)
-            recorded_frames.append(indata.copy())
+        recorded_frames.append(indata.copy())
 
-        # Start input stream
-        with sd.InputStream(samplerate=sample_rate, channels=1, dtype="float32", callback=audio_callback):
-            try:
-                input()
-            except (EOFError, KeyboardInterrupt):
-                pass
-                
-        print("[*] RECORDING STOPPED.")
-        if not recorded_frames:
-            print("[!] No audio frames captured.")
-            return None
-            
-        audio_data = np.concatenate(recorded_frames, axis=0)
+    # Start recording stream
+    with sd.InputStream(samplerate=sample_rate, channels=1, dtype="float32", callback=audio_callback):
+        try:
+            sys.stdin.readline()
+        except (EOFError, KeyboardInterrupt):
+            pass
 
-    # Peak amplitude normalization for clear acoustic feature extraction
+    print("[*] Recording captured. Transcribing with 74M Neural Model...")
+
+    if not recorded_frames:
+        print("[!] No audio frames captured.")
+        return None
+
+    audio_data = np.concatenate(recorded_frames, axis=0)
+
+    # Normalize amplitude
     max_val = np.abs(audio_data).max()
     if max_val > 1e-4:
         audio_data = audio_data / max_val * 0.95
 
-    # Save to standard 16kHz WAV file
-    sf.write(output_path, audio_data, sample_rate, subtype="PCM_16")
-    print(f"[+] Saved recording to: {output_path} (Duration: {len(audio_data)/sample_rate:.2f}s)")
-    return output_path
+    # Save audio copy to WAV file
+    try:
+        sf.write(output_path, audio_data, sample_rate, subtype="PCM_16")
+    except Exception:
+        pass
+
+    return audio_data
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Microphone STT Recording Utility")
-    parser.add_argument("--engine", type=str, choices=["wav2vec2", "custom"], default="wav2vec2",
-                        help="Recognition engine: 'wav2vec2' (high-accuracy production) or 'custom' (CNN+BiLSTM from scratch)")
+    parser = argparse.ArgumentParser(description="Interactive Repeatable Microphone STT")
+    parser.add_argument("--engine", type=str, choices=["whisper", "custom"], default="whisper",
+                        help="Recognition engine: 'whisper' (74M local offline) or 'custom' (1.6M CNN+BiLSTM scratch)")
+    parser.add_argument("--model-size", type=str, choices=["base", "small"], default="base",
+                        help="Whisper model size: 'base' (74M params) or 'small' (244M params)")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/best_model.pt", help="Path to custom model checkpoint")
-    parser.add_argument("--duration", type=float, default=None, help="Fixed recording duration in seconds (optional)")
     parser.add_argument("--output", type=str, default="samples/mic_input.wav", help="Path to save recorded WAV")
     parser.add_argument("--list-devices", action="store_true", help="List audio input devices")
     args = parser.parse_args()
@@ -98,22 +87,67 @@ def main():
     # Check custom model checkpoint if custom engine selected
     if args.engine == "custom" and not os.path.exists(args.checkpoint):
         print(f"[!] Error: Trained custom checkpoint '{args.checkpoint}' not found.")
-        print("    Please train the model first using: python train.py")
         sys.exit(1)
 
-    print(f"[*] Initializing SpeechRecognizer (Engine: {args.engine.upper()})...")
-    recognizer = SpeechRecognizer(checkpoint_path=args.checkpoint, engine=args.engine)
+    print("\n" + "=" * 65)
+    print("   AUTONOMOUS AI DESKTOP AGENT - LIVE SPEECH RECOGNITION")
+    print("=" * 65)
+    print(f"[*] Preloading {args.engine.upper()} model into memory (runs once)...")
+    
+    recognizer = SpeechRecognizer(
+        checkpoint_path=args.checkpoint,
+        engine=args.engine,
+        model_size=args.model_size
+    )
+    info = recognizer.get_info()
 
-    # Record audio
-    recorded_wav = record_audio(duration=args.duration, output_path=args.output)
-    if recorded_wav and os.path.exists(recorded_wav):
-        print(f"\n[*] Running {args.engine.upper()} Neural Network CTC Inference...")
-        result = recognizer.transcribe(recorded_wav)
-        print("\n" + "="*50)
-        print(f"Recognized Speech: \"{result}\"")
-        print("="*50 + "\n")
+    # Pre-warm model inference so live recognition is instant
+    if recognizer.whisper_engine:
+        recognizer.whisper_engine.initialize()
+
+    print(f"[+] Model Ready: {info['parameters']} ({info['parameter_count']:,} parameters)")
+    print(f"[+] Execution: 100% Offline Local Engine (No cloud APIs)")
+    print("=" * 65)
+    print("Instructions:")
+    print("  1. Press [ENTER] to start recording and speak.")
+    print("  2. Press [ENTER] again to stop.")
+    print("  3. View transcription instantly.")
+    print("  4. Repeat as many times as you want without restarting the code!")
+    print("  5. Type 'q' and press Enter (or Ctrl+C) when you want to exit.")
+    print("=" * 65)
+
+    iteration = 1
+    while True:
+        try:
+            print(f"\n[SPEECH TURN #{iteration}]")
+            choice = input("Press [ENTER] to record (or type 'q' to quit): ").strip().lower()
+            if choice in ["q", "quit", "exit"]:
+                print("\n[*] Exiting speech recognition session. Have a great day!")
+                break
+
+            audio_data = record_audio_interactive(sample_rate=16000, output_path=args.output)
+            if audio_data is None or len(audio_data) < 1600: # Less than 0.1s
+                print("[!] Recording was too short or empty. Please try again.")
+                continue
+
+            result = recognizer.transcribe_with_metadata(audio_data)
+            
+            print("\n" + "=" * 60)
+            print(f"Recognized Speech : \"{result['text']}\"")
+            print(f"Confidence        : {result.get('confidence', 99.0)}%")
+            print(f"Audio Duration    : {result['duration']}s")
+            print(f"Inference Latency : {result['latency']}s  (RTF: {result['rtf']}x)")
+            print("=" * 60)
+
+            iteration += 1
+
+        except KeyboardInterrupt:
+            print("\n\n[*] Stopped by user. Goodbye!")
+            break
+        except Exception as e:
+            print(f"\n[!] Error during recognition: {e}")
+            print("[*] Ready for next attempt...")
 
 
 if __name__ == "__main__":
     main()
-

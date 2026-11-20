@@ -1,7 +1,7 @@
 @echo off
 echo ========================================================
-echo   Autonomous AI Desktop Agent - Offline STT Engine
+echo   Autonomous AI Desktop Agent - Live Voice Recognition
 echo ========================================================
 echo.
-.\.venv\Scripts\python.exe stt-engine\engine.py
+.\.venv\Scripts\python.exe mic_record.py
 pause

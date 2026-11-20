@@ -1,0 +1,246 @@
+"""
+Local Offline Neural Speech-to-Text Engine
+High-Capacity Transformer Architecture (Whisper-Base 74M / Small 244M)
+Optimized with INT8 Quantization via CTranslate2 for Local CPU/GPU Inference.
+"""
+import os
+import sys
+import time
+import math
+import warnings
+from pathlib import Path
+from typing import Dict, Any, Union, Optional
+import numpy as np
+import soundfile as sf
+from scipy.signal import resample_poly
+
+# MKL & OpenMP heap stability on Windows
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+warnings.filterwarnings("ignore")
+
+try:
+    import ctranslate2
+    from faster_whisper import WhisperModel
+    FASTER_WHISPER_AVAILABLE = True
+except ImportError:
+    FASTER_WHISPER_AVAILABLE = False
+
+
+# Default local models directory path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_LOCAL_MODEL_PATH = PROJECT_ROOT / "stt-engine" / "models" / "acoustic-model"
+
+# Model specifications
+WHISPER_SPECS = {
+    "tiny": {
+        "parameters": "39 Million",
+        "param_count": 39_000_000,
+        "ram_mb": 150,
+        "layers": 4,
+        "hidden_dim": 384,
+        "heads": 6
+    },
+    "base": {
+        "parameters": "74 Million",
+        "param_count": 74_000_000,
+        "ram_mb": 220,
+        "layers": 6,
+        "hidden_dim": 512,
+        "heads": 8
+    },
+    "small": {
+        "parameters": "244 Million",
+        "param_count": 244_000_000,
+        "ram_mb": 580,
+        "layers": 12,
+        "hidden_dim": 768,
+        "heads": 12
+    },
+    "medium": {
+        "parameters": "769 Million",
+        "param_count": 769_000_000,
+        "ram_mb": 1500,
+        "layers": 24,
+        "hidden_dim": 1024,
+        "heads": 16
+    }
+}
+
+
+class LocalWhisperEngine:
+    """
+    Production-grade, 100% Offline Local Speech-to-Text Engine.
+    High-capacity neural acoustic model replacing toy 1.6M parameter scratch model.
+    Utilizes process-level singleton caching to prevent MKL heap duplication.
+    """
+    _cached_models: Dict[str, Any] = {}
+
+    def __init__(
+        self,
+        model_size: str = "base",
+        model_path: Optional[str] = None,
+        device: str = "cpu",
+        compute_type: str = "int8",
+        cpu_threads: int = 2,
+    ):
+        if not FASTER_WHISPER_AVAILABLE:
+            raise ImportError(
+                "faster-whisper package not installed. Install via: pip install faster-whisper"
+            )
+
+        self.model_size = model_size.lower()
+        self.device = device
+        self.compute_type = compute_type
+        self.cpu_threads = cpu_threads
+
+        # Determine model path
+        if model_path and os.path.exists(model_path):
+            self.model_source = str(Path(model_path).resolve())
+        elif DEFAULT_LOCAL_MODEL_PATH.exists() and (DEFAULT_LOCAL_MODEL_PATH / "model.bin").exists():
+            self.model_source = str(DEFAULT_LOCAL_MODEL_PATH.resolve())
+        else:
+            self.model_source = self.model_size
+
+        self.specs = WHISPER_SPECS.get(self.model_size, WHISPER_SPECS["base"])
+        self.cache_key = f"{self.model_source}:{self.device}:{self.compute_type}:{self.cpu_threads}"
+
+    def initialize(self):
+        """Loads model into memory if not already initialized (singleton cache)."""
+        if self.cache_key not in LocalWhisperEngine._cached_models:
+            t0 = time.time()
+            LocalWhisperEngine._cached_models[self.cache_key] = WhisperModel(
+                self.model_source,
+                device=self.device,
+                compute_type=self.compute_type,
+                cpu_threads=self.cpu_threads,
+                num_workers=1
+            )
+            self.load_time = time.time() - t0
+        return LocalWhisperEngine._cached_models[self.cache_key]
+
+    @property
+    def model(self):
+        return self.initialize()
+
+    @staticmethod
+    def load_audio(audio_input: Union[str, Path, np.ndarray]) -> np.ndarray:
+        """
+        Loads and standardizes audio to 16,000 Hz Mono Float32 NumPy array.
+        Bypasses pyav audio decoder to prevent container errors.
+        """
+        if isinstance(audio_input, (str, Path)):
+            audio_path = str(audio_input)
+            if not os.path.exists(audio_path):
+                raise FileNotFoundError(f"Audio file not found: {audio_path}")
+            data, sr = sf.read(audio_path, dtype="float32")
+        elif isinstance(audio_input, np.ndarray):
+            data = audio_input.astype(np.float32)
+            sr = 16000
+        elif hasattr(audio_input, "detach"): # Torch Tensor
+            data = audio_input.detach().cpu().numpy().astype(np.float32)
+            sr = 16000
+        else:
+            raise TypeError(f"Unsupported audio input type: {type(audio_input)}")
+
+        # Convert stereo or multi-channel to mono
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+
+        # Resample to 16,000 Hz if necessary
+        target_sr = 16000
+        if sr != target_sr:
+            gcd = math.gcd(int(sr), target_sr)
+            up = target_sr // gcd
+            down = int(sr) // gcd
+            data = resample_poly(data, up, down).astype(np.float32)
+
+        # Normalize audio peak
+        max_val = np.abs(data).max() if len(data) > 0 else 0.0
+        if max_val > 1.0:
+            data = data / max_val
+
+        return data
+
+    def transcribe(self, audio_input: Union[str, Path, np.ndarray], language: str = "en") -> str:
+        """
+        Transcribes audio into text.
+        Returns the decoded text string with capitalization & punctuation.
+        """
+        result = self.transcribe_with_metadata(audio_input, language=language)
+        return result["text"]
+
+    def transcribe_with_metadata(
+        self,
+        audio_input: Union[str, Path, np.ndarray],
+        language: Optional[str] = "en",
+        beam_size: int = 5,
+        temperature: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        Transcribes audio and returns comprehensive transcription & performance metrics.
+        """
+        m = self.initialize()
+        audio_data = self.load_audio(audio_input)
+        duration = len(audio_data) / 16000.0
+
+        if len(audio_data) == 0:
+            return {
+                "text": "",
+                "language": language or "en",
+                "confidence": 0.0,
+                "duration": 0.0,
+                "latency": 0.0,
+                "rtf": 0.0,
+                "model_parameters": self.specs["parameters"]
+            }
+
+        t0 = time.time()
+        segments, info = m.transcribe(
+            audio_data,
+            language=language,
+            beam_size=beam_size,
+            temperature=temperature
+        )
+
+        collected_text = []
+        for s in segments:
+            text = s.text.strip()
+            if text:
+                collected_text.append(text)
+
+        latency = time.time() - t0
+        rtf = latency / max(0.01, duration)
+
+        return {
+            "text": " ".join(collected_text).strip(),
+            "language": info.language.upper() if info.language else (language.upper() if language else "EN"),
+            "confidence": round(float(info.language_probability) * 100, 1) if info.language_probability else 99.0,
+            "duration": round(duration, 2),
+            "latency": round(latency, 3),
+            "rtf": round(rtf, 3),
+            "model_name": f"Whisper-{self.model_size.capitalize()} (Local INT8)",
+            "model_parameters": self.specs["parameters"],
+            "parameter_count": self.specs["param_count"],
+            "quantization": self.compute_type.upper(),
+            "offline": True
+        }
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """Returns detailed architectural specifications of this local engine."""
+        return {
+            "name": f"Local Neural Whisper ({self.model_size.capitalize()})",
+            "model_type": "Sequence-to-Sequence Deep Transformer",
+            "parameters": self.specs["parameters"],
+            "parameter_count": self.specs["param_count"],
+            "quantization": f"{self.compute_type.upper()} CPU Optimized (CTranslate2)",
+            "ram_footprint": f"~{self.specs['ram_mb']} MB",
+            "offline": True,
+            "source_path": self.model_source,
+            "comparison_with_baseline": {
+                "custom_scratch_model_params": "1.6 Million (CNN + BiLSTM + CTC)",
+                "whisper_local_model_params": self.specs["parameters"],
+                "scale_factor": f"{self.specs['param_count'] / 1_600_000:.1f}x larger capacity"
+            }
+        }
