@@ -18,6 +18,11 @@ tts_module/models/kokoro/*.bin
 *.onnx
 *.safetensors
 
+# STT Training Datasets & Redundant Checkpoints
+data/wavs/
+data/all.csv
+checkpoints/last_checkpoint.pt
+
 # Audio samples & outputs
 samples/mic_input.wav
 tts_module/audio/output/*.wav
@@ -29,4 +34,3 @@ tts_module/audio/output/*.wav
 .idea/
 .DS_Store
 Thumbs.db
-

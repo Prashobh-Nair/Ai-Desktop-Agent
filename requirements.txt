@@ -1,4 +1,6 @@
 # Module 1: Speech-to-Text (STT) Dependencies
+faster-whisper>=1.0.0
+ctranslate2>=4.0.0
 torch>=2.0.0
 torchaudio>=2.0.0
 sounddevice>=0.4.0
