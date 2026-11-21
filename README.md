@@ -69,6 +69,34 @@ Ai-Desktop-Agent/
 │   ├── model.py                       # CNN + BiLSTM + CTC PyTorch Module
 │   └── text.py                        # Tokenizer & CTC Greedy Decoder
 │
+├── brain_module/                      # Module 2: Brain / LLM (Sahaj Patel)
+│   ├── jarvis/                        # Core Brain engine & schemas
+│   │   ├── brain.py                   # Master Brain coordinator (Model + Rules fallback)
+│   │   ├── llm.py                     # Local Ollama client with strict JSON validation
+│   │   ├── normalize.py               # Speech normalization & Hinglish clause splitter
+│   │   ├── planner.py                 # Deterministic rule-based fallback planner
+│   │   └── schema.py                  # Pydantic V2 Plan, Step & Action schemas
+│   ├── data/                          # Fine-tuning & evaluation datasets
+│   │   ├── train.jsonl                # Fine-tuning dataset (1.6 MB)
+│   │   ├── val.jsonl                  # Validation dataset (84 KB)
+│   │   └── heldout.jsonl              # Out-of-domain evaluation set (157 KB)
+│   ├── tests/                         # Benchmark evaluation suite
+│   │   └── test_set.json              # 87 hand-crafted benchmark test cases
+│   ├── jarvis_gguf/                   # Quantized GGUF model files
+│   │   └── Modelfile.gguf             # Ollama model definition
+│   ├── jarvis_merged/                 # Hugging Face format model configs & tokenizer
+│   │   ├── tokenizer.json             # Model tokenizer definition (11.4 MB)
+│   │   ├── config.json                # Transformer configuration
+│   │   └── chat_template.jinja        # Chat prompt template
+│   ├── chat.py                        # Interactive Brain CLI console
+│   ├── download_model.py              # Automated downloader for jarvis-q8.gguf (1.53 GB)
+│   ├── evaluate.py                    # Quantitative benchmark evaluation script
+│   ├── make_dataset.py                # Synthetic training dataset generation pipeline
+│   ├── test_stage1.py                 # Schema & safety validation tests
+│   ├── test_stage2.py                 # Text normalization & Hinglish parsing tests
+│   ├── test_stage3.py                 # Multi-intent planning tests
+│   └── README.md                      # Detailed Brain module documentation
+│
 ├── tts_module/                        # Module 3: Local Neural TTS Engine (Kokoro-82M)
 │   ├── models/
 │   │   └── kokoro/                    # Pre-trained Kokoro ONNX model & voice bins
@@ -156,6 +184,45 @@ python app.py
 
 # 6. Run comprehensive STT automated test suite (all 6 stages)
 python test_stt.py
+```
+
+---
+
+# MODULE 2: BRAIN / LLM
+*Developed by Sahaj Patel*
+
+Module 2 serves as the central cognitive brain for the Autonomous Desktop Agent. It receives natural language transcriptions from Module 1 (STT), normalizes noisy or Hinglish speech, reasons over user intent, formulates a deterministic execution plan, and generates natural spoken dialogue for synthesis by Module 3 (TTS).
+
+### Key Capabilities
+- **Dual-Mode Execution Architecture:**
+  1. **Fine-Tuned Local Neural Model:** Offline compact LLM quantized to INT8 (1.53 GB GGUF), running via Ollama with strict Pydantic JSON schema constraints.
+  2. **Deterministic Rule-Based Fallback Engine:** Sub-millisecond fallback planner (<0.2 ms) with zero-hallucination guarantee, ensuring uninterrupted desktop assistance if the neural model is offline.
+- **Hinglish & Multi-Dialect Support:** Understands colloquial Indian English and Hinglish phrases (e.g., *"yaar youtube kholo aur arijit ka song chala do"*).
+- **Safety Confirmation Barriers:** Destructive system operations (e.g. `shutdown`, `restart`, `sleep`, file deletion) automatically mandate explicit voice confirmation (`needs_confirmation=True`).
+- **Contextual Session Tracking:** Tracks active desktop applications across multi-turn exchanges (e.g., *"play believer"* followed by *"pause"* automatically targets Spotify).
+- **Quantitative Benchmark Performance:** Evaluated against 87 hand-crafted desktop commands in `tests/test_set.json`:
+  - **Intent Classification Accuracy:** **94.2%** (Fine-tuned model) / **80.5%** (Rule baseline)
+  - **Action Step Extraction Accuracy:** **92.0%** (Fine-tuned model) / **83.9%** (Rule baseline)
+  - **Safety Confirmation Precision:** **100.0%** (Fine-tuned model) / **98.9%** (Rule baseline)
+
+### Module 2 Usage & Commands
+```bash
+# 1. Download pre-trained 1.53 GB Jarvis GGUF weights locally
+python brain_module/download_model.py
+
+# 2. Register model with local Ollama
+ollama create jarvis -f brain_module/jarvis_gguf/Modelfile.gguf
+
+# 3. Interactive conversational Brain console (test with typed commands)
+python brain_module/chat.py
+
+# 4. Run automated test suites (Stages 1-3)
+python brain_module/test_stage1.py
+python brain_module/test_stage2.py
+python brain_module/test_stage3.py
+
+# 5. Run quantitative evaluation benchmark
+python brain_module/evaluate.py
 ```
 
 ---

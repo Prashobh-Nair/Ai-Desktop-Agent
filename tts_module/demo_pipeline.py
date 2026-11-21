@@ -43,21 +43,65 @@ class WhisperSTTModule:
         return user_audio_input.strip()
 
 
-class MockLLMBrain:
+class DesktopAgentBrain:
     """
-    Simulation connector for Sahaj Patel's Module 2: Brain / LLM.
+    Live local connector for Sahaj Patel's Module 2: Brain / LLM.
     Understands intent, determines desktop action, and generates natural language response.
+    Powered by fine-tuned Jarvis LLM with automatic rule-based planner fallback.
     """
     def __init__(self):
-        self.model_name = "Local Desktop LLM Agent (Brain)"
+        self.model_name = "Jarvis Local Brain (Fine-Tuned LLM + Rule Planner, Sahaj Patel)"
+        self.brain = None
+        try:
+            from brain_module import Brain
+            self.brain = Brain()
+        except Exception:
+            try:
+                from brain_module.jarvis.brain import Brain
+                self.brain = Brain()
+            except Exception as e:
+                print(f"[!] Notice loading Brain module: {e}")
         
     def process_command(self, user_text: str) -> tuple[str, str]:
         """
         Processes transcribed user intent and returns (action_summary, spoken_response).
         """
         text_lower = user_text.lower()
-        time.sleep(0.4)  # Simulate LLM inference / thinking time
         
+        # Check team credits query
+        if "team" in text_lower or "members" in text_lower or "who made" in text_lower or "who developed" in text_lower:
+            action = "DESKTOP_ACTION: display_team_credits()"
+            response = (
+                "This AI Desktop Agent is developed by our B.Tech Computer Science team: "
+                "Prashobh Nair for Whisper Speech to Text, "
+                "Sahaj Patel for the LLM Brain, "
+                "and the custom Kokoro-82M neural Text to Speech engine."
+            )
+            return action, response
+
+        # Use Sahaj's Brain if available
+        if self.brain:
+            try:
+                out = self.brain.plan(user_text, session_id="demo_pipeline")
+                plan = out.get("plan", {})
+                intent = plan.get("intent", "unknown")
+                steps = plan.get("steps", [])
+                reply = plan.get("reply") or "Command received."
+                
+                if steps:
+                    first_step = steps[0]
+                    act_name = first_step.get("action", intent)
+                    target = first_step.get("target") or first_step.get("value") or first_step.get("query") or ""
+                    action = f"DESKTOP_ACTION: {act_name}('{target}')"
+                else:
+                    action = f"DESKTOP_ACTION: intent_{intent}()"
+                    
+                return action, reply
+            except Exception as e:
+                print(f"[!] Brain planner fallback note: {e}")
+
+        # Deterministic fallback response simulation
+        time.sleep(0.3)
         if "ram" in text_lower or "cpu" in text_lower or "performance" in text_lower or "system" in text_lower:
             action = "DESKTOP_ACTION: query_system_metrics()"
             response = (
@@ -70,19 +114,13 @@ class MockLLMBrain:
         elif "reminder" in text_lower or "schedule" in text_lower:
             action = "DESKTOP_ACTION: create_calendar_event(time='10:00 AM', date='tomorrow')"
             response = "I have scheduled your reminder for tomorrow at 10:00 AM. I will alert you 15 minutes prior."
-        elif "team" in text_lower or "members" in text_lower or "who" in text_lower:
-            action = "DESKTOP_ACTION: display_team_credits()"
-            response = (
-                "This AI Desktop Agent is developed by our B.Tech Computer Science team: "
-                "Prashobh Nair for Whisper Speech to Text, "
-                "Sahaj Patel for the LLM Brain, "
-                "and the custom Kokoro-82M neural Text to Speech engine."
-            )
         else:
             action = f"DESKTOP_ACTION: generic_assistant_response('{user_text}')"
-            response = f"I understood your request: {user_text}. I am executing that operation right now."
+            response = f"I understood your request: {user_text}. Executing that operation now."
             
         return action, response
+
+MockLLMBrain = DesktopAgentBrain
 
 
 def run_pipeline_demo():

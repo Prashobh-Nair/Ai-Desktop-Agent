@@ -14,6 +14,9 @@ __pycache__/
 stt-engine/models/
 tts_module/models/kokoro/*.onnx
 tts_module/models/kokoro/*.bin
+brain_module/jarvis_gguf/*.gguf
+!brain_module/jarvis_gguf/Modelfile.gguf
+brain_module/jarvis_merged/*.safetensors
 *.bin
 *.onnx
 *.safetensors
