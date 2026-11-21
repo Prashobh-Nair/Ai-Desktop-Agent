@@ -54,19 +54,24 @@ def make_reply(plan: Plan) -> str:
 class Brain:
     def __init__(self, mode: Optional[str] = None):
         self.mode = (mode or os.getenv("BRAIN_MODE", "auto")).lower()
-        if self.mode == "auto":
-            self.mode = "model"
         self.rules = RulesPlanner()
         self.model = JarvisModel()
         self.sessions: Dict[str, Dict] = {}   # remembers the last app per user/session
+
+        # Check local Ollama daemon availability once at startup
+        self.ollama_available = self.model.is_reachable()
+        if self.mode == "auto":
+            self.mode = "model" if self.ollama_available else "rules"
 
     def plan(self, text: str, session_id: str = "default") -> Dict:
         start = time.perf_counter()
         ctx = self.sessions.setdefault(session_id, {})
         used, note = "rules", None
 
-        if self.mode == "rules":
+        if self.mode == "rules" or not self.ollama_available:
             plan = self.rules.plan(text, ctx)
+            used = "rules"
+            note = None
         else:
             plan = None
             if self.mode == "hybrid":

@@ -40,6 +40,83 @@ def _url(x: str) -> str:
 class RulesPlanner:
     def plan(self, text: str, ctx: Optional[Dict] = None) -> Plan:
         ctx = ctx or {}
+        clean_raw = re.sub(r"[^\w\s]", " ", text.strip().lower())
+        clean_raw = re.sub(r"\s+", " ", clean_raw).strip()
+
+        # --- wake words & empty invocation ---
+        if clean_raw in ("jarvis", "hey jarvis", "ok jarvis", "okay jarvis", "hello jarvis", "hi jarvis", "yo jarvis"):
+            return Plan(
+                intent=Intent.CHAT,
+                steps=[],
+                reply="Yes, I am here and listening. What can I do for you?",
+                confidence=1.0,
+            )
+
+        # --- greetings & conversational talk (Intent.CHAT) ---
+        if re.match(r"^(?:hello|hi|hey|greetings|good\s*(?:morning|afternoon|evening)|yo)\b", clean_raw):
+            return Plan(
+                intent=Intent.CHAT,
+                steps=[],
+                reply="Hello! I am Jarvis, your autonomous desktop assistant. What can I do for you?",
+                confidence=1.0,
+            )
+        if re.search(r"\b(?:how\s+are\s+you|how\s+are\s+you\s+doing|kya\s+haal\s+hai|kaise\s+ho)\b", clean_raw):
+            return Plan(
+                intent=Intent.CHAT,
+                steps=[],
+                reply="I am running at optimal performance, ready for your commands!",
+                confidence=1.0,
+            )
+        if re.search(r"\b(?:who\s+(?:made|created|built|developed|coded)\s+you|who\s+are\s+your\s+creators|kisne\s+banaya)\b", clean_raw):
+            return Plan(
+                intent=Intent.CHAT,
+                steps=[],
+                reply="I was developed by Prashobh Nair, Sahaj Patel, and Zeel Vasoya for our AI Autonomous Desktop Agent project.",
+                confidence=1.0,
+            )
+        if re.search(r"\b(?:who\s+are\s+you|what\s+is\s+your\s+name|tum\s+kaun\s+ho|introduce\s+yourself)\b", clean_raw):
+            return Plan(
+                intent=Intent.CHAT,
+                steps=[],
+                reply="I am the AI-Powered Autonomous Desktop Agent, developed by Prashobh Nair, Sahaj Patel, and Zeel Vasoya.",
+                confidence=1.0,
+            )
+        if re.search(r"\b(?:what\s+can\s+you\s+do|capabilities|features|commands|what\s+are\s+your\s+features|tum\s+kya\s+kar\s+sakte\s+ho)\b", clean_raw) or clean_raw in ("help", "features", "commands"):
+            return Plan(
+                intent=Intent.CHAT,
+                steps=[],
+                reply="I can open applications, search Google, play music on YouTube, control media playback and volume, report the time and date, and manage system operations.",
+                confidence=1.0,
+            )
+        if re.search(r"\b(?:thank\s+you|thanks|thank\s+you\s+so\s+much|shukriya|dhanyawad|good\s+job|great\s+job|awesome|nice|well\s+done)\b", clean_raw):
+            return Plan(
+                intent=Intent.CHAT,
+                steps=[],
+                reply="You are very welcome! Let me know if you need anything else.",
+                confidence=1.0,
+            )
+        if re.search(r"\b(?:are\s+you\s+(?:there|ready|listening|online)|system\s+status|status)\b", clean_raw) or clean_raw in ("status", "ready"):
+            return Plan(
+                intent=Intent.CHAT,
+                steps=[],
+                reply="All systems are nominal and ready for commands.",
+                confidence=1.0,
+            )
+
+        # --- time & date (Intent.INFO) ---
+        if re.search(r"\b(?:what(?:\s*is|'?s)?\s+(?:the\s+)?time|tell\s+(?:me\s+)?the\s+time|current\s+time|what\s+time\s+is\s+it|time\s+kya\s+hua|samay\s+kya\s+hua)\b", clean_raw) or clean_raw in ("time", "samay"):
+            return Plan(
+                intent=Intent.INFO,
+                steps=[Step(action=Action.GET_TIME)],
+                confidence=1.0,
+            )
+        if re.search(r"\b(?:what(?:\s*is|'?s)?\s+(?:the\s+|today'?s\s+)?date|tell\s+(?:me\s+)?the\s+date|today'?s\s+date|what\s+day\s+is\s+it|aaj\s+ka\s+din|aaj\s+ki\s+date)\b", clean_raw) or clean_raw in ("date", "today"):
+            return Plan(
+                intent=Intent.INFO,
+                steps=[Step(action=Action.GET_DATE)],
+                confidence=1.0,
+            )
+
         clauses = split_clauses(text)
         steps: List[Step] = []
         ctx_app: Optional[str] = ctx.get("last_app")  # app from earlier turns (for "pause", "next")
@@ -52,29 +129,6 @@ class RulesPlanner:
             c = clause.strip()
             if not c:
                 continue
-
-            # --- greetings & conversational talk (Intent.CHAT) ---
-            if re.match(r"^(?:hello|hi|hey|greetings|good\s*(?:morning|afternoon|evening)|yo)\b", c, re.IGNORECASE):
-                return Plan(
-                    intent=Intent.CHAT,
-                    steps=[],
-                    reply="Hello! I am Jarvis, your autonomous desktop assistant. What can I do for you?",
-                    confidence=1.0,
-                )
-            if re.match(r"^(?:how\s+are\s+you|how\s+are\s+you\s+doing|kya\s+haal\s+hai|kaise\s+ho)\b", c, re.IGNORECASE):
-                return Plan(
-                    intent=Intent.CHAT,
-                    steps=[],
-                    reply="I am running at optimal performance, ready for your commands!",
-                    confidence=1.0,
-                )
-            if re.match(r"^(?:who\s+are\s+you|what\s+is\s+your\s+name|tum\s+kaun\s+ho|introduce\s+yourself)\b", c, re.IGNORECASE):
-                return Plan(
-                    intent=Intent.CHAT,
-                    steps=[],
-                    reply="I am the AI-Powered Autonomous Desktop Agent, developed by Prashobh Nair, Sahaj Patel, and Zeel Vasoya.",
-                    confidence=1.0,
-                )
 
             # --- open / go to ---
             m = re.match(r"^(?:open|launch|start|run)\s+(?P<x>.+)$", c)
@@ -197,9 +251,11 @@ class RulesPlanner:
         if clarification:
             return Plan(intent=Intent.CLARIFY, steps=[], clarification_question=clarification, confidence=0.9)
         if not steps:
+            tip = "I didn't recognize that command. You can ask me to open apps (e.g. 'open chrome'), play music (e.g. 'play Believer'), search Google, or check the time."
             return Plan(
                 intent=Intent.UNKNOWN,
-                clarification_question="Sorry, I didn't understand that. Could you say it again?",
+                clarification_question=tip,
+                reply=tip,
                 confidence=0.0,
             )
 
