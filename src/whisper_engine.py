@@ -69,6 +69,13 @@ WHISPER_SPECS = {
 }
 
 
+DEFAULT_PROMPT_BIAS = (
+    "Autonomous AI Desktop Agent commands. "
+    "Team members: Prashobh Nair, Sahaj Patel, Zeel Vasoya, Mayank. "
+    "Common desktop applications, speech recognition, and technical terms:"
+)
+
+
 class LocalWhisperEngine:
     """
     Production-grade, 100% Offline Local Speech-to-Text Engine.
@@ -175,6 +182,7 @@ class LocalWhisperEngine:
         self,
         audio_input: Union[str, Path, np.ndarray],
         language: Optional[str] = "en",
+        initial_prompt: Optional[str] = DEFAULT_PROMPT_BIAS,
         beam_size: int = 5,
         temperature: float = 0.0,
     ) -> Dict[str, Any]:
@@ -200,6 +208,7 @@ class LocalWhisperEngine:
         segments, info = m.transcribe(
             audio_data,
             language=language,
+            initial_prompt=initial_prompt,
             beam_size=beam_size,
             temperature=temperature
         )

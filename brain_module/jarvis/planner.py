@@ -53,6 +53,29 @@ class RulesPlanner:
             if not c:
                 continue
 
+            # --- greetings & conversational talk (Intent.CHAT) ---
+            if re.match(r"^(?:hello|hi|hey|greetings|good\s*(?:morning|afternoon|evening)|yo)\b", c, re.IGNORECASE):
+                return Plan(
+                    intent=Intent.CHAT,
+                    steps=[],
+                    reply="Hello! I am Jarvis, your autonomous desktop assistant. What can I do for you?",
+                    confidence=1.0,
+                )
+            if re.match(r"^(?:how\s+are\s+you|how\s+are\s+you\s+doing|kya\s+haal\s+hai|kaise\s+ho)\b", c, re.IGNORECASE):
+                return Plan(
+                    intent=Intent.CHAT,
+                    steps=[],
+                    reply="I am running at optimal performance, ready for your commands!",
+                    confidence=1.0,
+                )
+            if re.match(r"^(?:who\s+are\s+you|what\s+is\s+your\s+name|tum\s+kaun\s+ho|introduce\s+yourself)\b", c, re.IGNORECASE):
+                return Plan(
+                    intent=Intent.CHAT,
+                    steps=[],
+                    reply="I am the AI-Powered Autonomous Desktop Agent, developed by Prashobh Nair, Sahaj Patel, and Zeel Vasoya.",
+                    confidence=1.0,
+                )
+
             # --- open / go to ---
             m = re.match(r"^(?:open|launch|start|run)\s+(?P<x>.+)$", c)
             if m:

@@ -33,7 +33,23 @@ class JarvisModel:
         self.url = (url or os.getenv("OLLAMA_URL", "http://localhost:11434")).rstrip("/")
         self.timeout = timeout
 
+    def is_reachable(self) -> bool:
+        """Fast non-blocking check whether local Ollama daemon is actively listening."""
+        import socket
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(self.url)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or 11434
+            with socket.create_connection((host, port), timeout=0.25):
+                return True
+        except (OSError, TimeoutError):
+            return False
+
     def _chat(self, text: str) -> str:
+        if not self.is_reachable():
+            raise ModelUnavailable("Ollama daemon is not running on localhost:11434. Using deterministic rule-based planner.")
+
         body = json.dumps({
             "model": self.name,
             "messages": [{"role": "system", "content": SYSTEM_PROMPT},
