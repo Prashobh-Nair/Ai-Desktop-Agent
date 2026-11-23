@@ -82,7 +82,8 @@ def main():
     print("[2/3] Loading Module 2: Jarvis Brain / Reasoning Engine...")
     t0 = time.time()
     brain = Brain(mode="auto")
-    print(f"      [OK] Brain ready in mode: '{brain.mode}' ({time.time() - t0:.2f}s)")
+    engine_desc = "Local Neural LLM (Jarvis via Ollama)" if brain.ollama_available else "Deterministic Rule-Based Fallback"
+    print(f"      [OK] Brain ready in mode: '{brain.mode}' -> Engine: {engine_desc} ({time.time() - t0:.2f}s)")
 
     # 3. Initialize Module 3 (Kokoro TTS)
     print("[3/3] Loading Module 3: Kokoro-82M Neural Text-to-Speech Engine...")
@@ -136,9 +137,10 @@ def main():
         plan = brain_out.get("plan", {})
         intent = plan.get("intent", "chat")
         spoken_reply = plan.get("reply") or "I processed your request."
+        backend = brain_out.get("backend", "model")
         latency_brain = time.time() - t_brain
 
-        print(f">>> JARVIS   : \"{spoken_reply}\" (Intent: {intent} | Brain latency: {latency_brain:.2f}s)")
+        print(f">>> JARVIS   : \"{spoken_reply}\" (Engine: {backend} | Intent: {intent} | Latency: {latency_brain:.2f}s)")
 
         # Step 3: TTS (Text-to-Speech Audio Playback)
         print("[*] Speaking reply with Kokoro-82M Neural Engine...")

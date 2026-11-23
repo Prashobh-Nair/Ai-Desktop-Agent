@@ -39,11 +39,15 @@ class JarvisModel:
         from urllib.parse import urlparse
         try:
             parsed = urlparse(self.url)
-            host = parsed.hostname or "127.0.0.1"
             port = parsed.port or 11434
-            with socket.create_connection((host, port), timeout=0.25):
-                return True
-        except (OSError, TimeoutError):
+            for host in ("127.0.0.1", parsed.hostname or "127.0.0.1"):
+                try:
+                    with socket.create_connection((host, port), timeout=0.3):
+                        return True
+                except (OSError, TimeoutError):
+                    continue
+            return False
+        except Exception:
             return False
 
     def _chat(self, text: str) -> str:

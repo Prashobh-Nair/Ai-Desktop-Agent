@@ -51,6 +51,35 @@ def make_reply(plan: Plan) -> str:
     return "Done."
 
 
+def ensure_ollama_running() -> bool:
+    """Checks if Ollama is listening on localhost:11434; if not, automatically launches it."""
+    import socket
+    import subprocess
+
+    for host in ("127.0.0.1", "localhost"):
+        try:
+            with socket.create_connection((host, 11434), timeout=0.25):
+                return True
+        except (OSError, TimeoutError):
+            pass
+
+    ollama_exe = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe")
+    if os.path.exists(ollama_exe):
+        try:
+            DETACHED_PROCESS = 0x00000008
+            subprocess.Popen([ollama_exe, "serve"], creationflags=DETACHED_PROCESS, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for _ in range(15):
+                time.sleep(0.2)
+                try:
+                    with socket.create_connection(("127.0.0.1", 11434), timeout=0.25):
+                        return True
+                except (OSError, TimeoutError):
+                    pass
+        except Exception:
+            pass
+    return False
+
+
 class Brain:
     def __init__(self, mode: Optional[str] = None):
         self.mode = (mode or os.getenv("BRAIN_MODE", "auto")).lower()
@@ -58,7 +87,8 @@ class Brain:
         self.model = JarvisModel()
         self.sessions: Dict[str, Dict] = {}   # remembers the last app per user/session
 
-        # Check local Ollama daemon availability once at startup
+        # Ensure local neural daemon is running
+        ensure_ollama_running()
         self.ollama_available = self.model.is_reachable()
         if self.mode == "auto":
             self.mode = "model" if self.ollama_available else "rules"
