@@ -130,7 +130,7 @@ class GroqBrainModel:
             "model": self.model_name,
             "messages": messages,
             "temperature": 0.2 if json_mode else 0.4,
-            "max_tokens": 180,
+            "max_tokens": 1024,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -143,6 +143,10 @@ class GroqBrainModel:
         last_err: Exception | None = None
         for idx, model_id in enumerate(models_to_try):
             payload["model"] = model_id
+            if model_id.startswith("openai/gpt-oss"):
+                payload["reasoning_effort"] = "low"
+            else:
+                payload.pop("reasoning_effort", None)
             req = urllib.request.Request(
                 self.ENDPOINT,
                 data=json.dumps(payload).encode("utf-8"),

@@ -200,32 +200,33 @@ class Brain:
                     except (ModelUnavailable, BadModelOutput) as eg:
                         e = eg
                         backend_name = "gemini"
-                if used == "unavailable" and backend_name in ("groq", "gemini"):
-                    ensure_ollama_running()
-                    if self.model.is_reachable():
-                        self.ollama_available = True
-                        try:
-                            if _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
-                                ans = self.model.chat_answer(text)
-                                plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
-                            else:
-                                try:
-                                    plan, used = self.model.plan(text), "model"
-                                except BadModelOutput:
+                if used == "unavailable":
+                    if backend_name in ("groq", "gemini"):
+                        ensure_ollama_running()
+                        if self.model.is_reachable():
+                            self.ollama_available = True
+                            try:
+                                if _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
                                     ans = self.model.chat_answer(text)
                                     plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
+                                else:
+                                    try:
+                                        plan, used = self.model.plan(text), "model"
+                                    except BadModelOutput:
+                                        ans = self.model.chat_answer(text)
+                                        plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
+                            except (ModelUnavailable, BadModelOutput) as e2:
+                                plan, note = self._unavailable_plan(str(e2)), f"gemini & ollama failed: {e2}"
+                        else:
+                            plan, note = self._unavailable_plan(str(e)), f"gemini failed ({e}) and ollama unreachable"
+                    elif isinstance(e, BadModelOutput):
+                        try:
+                            ans = llm.chat_answer(text)
+                            plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), backend_name
                         except (ModelUnavailable, BadModelOutput) as e2:
-                            plan, note = self._unavailable_plan(str(e2)), f"gemini & ollama failed: {e2}"
+                            plan, note = self._unavailable_plan(str(e2)), f"model failed: {e2}"
                     else:
-                        plan, note = self._unavailable_plan(str(e)), f"gemini failed ({e}) and ollama unreachable"
-                elif isinstance(e, BadModelOutput):
-                    try:
-                        ans = llm.chat_answer(text)
-                        plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), backend_name
-                    except (ModelUnavailable, BadModelOutput) as e2:
-                        plan, note = self._unavailable_plan(str(e2)), f"model failed: {e2}"
-                else:
-                    plan, note = self._unavailable_plan(str(e)), f"model failed: {e}"
+                        plan, note = self._unavailable_plan(str(e)), f"model failed: {e}"
         else:
             plan, note = self._unavailable_plan("no LLM available"), "no LLM backend available"
 
