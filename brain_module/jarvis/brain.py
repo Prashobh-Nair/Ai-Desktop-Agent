@@ -7,6 +7,7 @@ mode "hybrid" : rules for very clear commands, the model for everything else
 mode "auto"   : same as "model" (default)
 """
 import os
+import re
 import time
 from datetime import datetime
 from typing import Dict, Optional
@@ -16,6 +17,12 @@ from .planner import RulesPlanner
 from .schema import Action, Intent, Plan, enforce_safety
 
 NEEDS_APP = (Action.PAUSE, Action.RESUME, Action.NEXT, Action.PREVIOUS)
+_EXPLICIT_SEARCH_RE = re.compile(r"\b(?:search|google|look\s*up|browse|dhundo|dhoondo)\b", re.IGNORECASE)
+_CHAT_QUESTION_RE = re.compile(
+    r"^\s*(?:tell\s+me|what\s+(?:is|are|was|were)|who\s+(?:is|are|was|were)|"
+    r"why\s+|how\s+(?:does|do|did|is|are|to)|explain\b|define\b|describe\b|write\b|can\s+you\s+tell\b)",
+    re.IGNORECASE,
+)
 
 
 def make_reply(plan: Plan) -> str:
@@ -134,7 +141,17 @@ class Brain:
                     plan = fast
             if plan is None:
                 try:
-                    plan, used = self.model.plan(text), "model"
+                    # Direct conversational Q&A when user asks to tell/explain (without asking to search)
+                    if _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
+                        answer = self.model.chat_answer(text)
+                        plan, used = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0), "model"
+                    else:
+                        plan, used = self.model.plan(text), "model"
+                        # Never open browser search unless user explicitly asked to search
+                        has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
+                        if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
+                            answer = self.model.chat_answer(text)
+                            plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
                 except (ModelUnavailable, BadModelOutput) as e:
                     plan, note = self.rules.plan(text, ctx), f"model failed, used rules: {e}"
 

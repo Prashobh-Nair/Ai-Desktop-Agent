@@ -18,6 +18,11 @@ SYSTEM_PROMPT = (
     "recognition and may be noisy or Hinglish. Reply with ONLY a JSON plan."
 )
 
+CHAT_SYSTEM_PROMPT = (
+    "You are Jarvis, a smart and polite AI desktop assistant. "
+    "Answer the user's question directly and clearly in 1 to 3 concise sentences suitable for speaking aloud."
+)
+
 
 class ModelUnavailable(Exception):
     """Ollama is not running, or the model is not installed."""
@@ -69,6 +74,34 @@ class JarvisModel:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read())["message"]["content"]
         except urllib.error.HTTPError as e:                  # e.g. 404 = model not created yet
+            raise ModelUnavailable(f"Ollama error {e.code}: {e.read().decode(errors='ignore')[:200]}") from e
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            raise ModelUnavailable(str(e)) from e
+
+    def chat_answer(self, text: str) -> str:
+        """Ask the local model for a direct conversational answer (no JSON action plan)."""
+        if not self.is_reachable():
+            raise ModelUnavailable("Ollama daemon is not running on localhost:11434.")
+
+        body = json.dumps({
+            "model": self.name,
+            "messages": [
+                {"role": "system", "content": CHAT_SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            "stream": False,
+            "keep_alive": "10m",
+            "options": {"temperature": 0.3, "num_predict": 160},
+        }).encode()
+        req = urllib.request.Request(
+            f"{self.url}/api/chat",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return json.loads(resp.read())["message"]["content"].strip()
+        except urllib.error.HTTPError as e:
             raise ModelUnavailable(f"Ollama error {e.code}: {e.read().decode(errors='ignore')[:200]}") from e
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
             raise ModelUnavailable(str(e)) from e
