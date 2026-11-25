@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from inference import SpeechRecognizer
+from src.executor import ActionExecutor
 from brain_module.jarvis.brain import Brain
 from tts_module.src.tts_engine import speak, get_tts_engine
 
@@ -78,12 +79,14 @@ def main():
     stt_recognizer = SpeechRecognizer(engine="whisper", model_size="base")
     print(f"      [OK] Whisper STT ready ({time.time() - t0:.2f}s)")
 
-    # 2. Initialize Module 2 (Brain)
+    # 2. Initialize Module 2 (Brain) & Module 4 (OS/Browser Executor)
     print("[2/3] Loading Module 2: Jarvis Brain / Reasoning Engine...")
     t0 = time.time()
     brain = Brain(mode="auto")
+    executor = ActionExecutor()
     engine_desc = "Local Neural LLM (Jarvis via Ollama)" if brain.ollama_available else "Deterministic Rule-Based Fallback"
     print(f"      [OK] Brain ready in mode: '{brain.mode}' -> Engine: {engine_desc} ({time.time() - t0:.2f}s)")
+    print("      [OK] OS & Browser Action Executor ready.")
 
     # 3. Initialize Module 3 (Kokoro TTS)
     print("[3/3] Loading Module 3: Kokoro-82M Neural Text-to-Speech Engine...")
@@ -142,11 +145,25 @@ def main():
 
         print(f">>> JARVIS   : \"{spoken_reply}\" (Engine: {backend} | Intent: {intent} | Latency: {latency_brain:.2f}s)")
 
-        # Step 3: TTS (Text-to-Speech Audio Playback)
+        # Step 3: Speak reply first so feedback is immediate
         print("[*] Speaking reply with Kokoro-82M Neural Engine...")
         t_tts = time.time()
         speak(spoken_reply, blocking=True)
         latency_tts = time.time() - t_tts
+
+        # Step 4: Execute OS & Browser Actions (if any)
+        steps = plan.get("steps") or []
+        if steps:
+            if plan.get("needs_confirmation"):
+                confirm = input("[!] Confirm risky system action? (yes/no): ").strip().lower()
+                if confirm not in ("y", "yes"):
+                    print("[*] Action cancelled.")
+                    speak("Action cancelled.")
+                    turn += 1
+                    continue
+            exec_logs = executor.execute_plan(plan)
+            for log in exec_logs:
+                print(f"[ACTION] {log}")
 
         total_latency = latency_stt + latency_brain + latency_tts
         print(f"[*] Turn #{turn} complete! Total pipeline latency: {total_latency:.2f}s")

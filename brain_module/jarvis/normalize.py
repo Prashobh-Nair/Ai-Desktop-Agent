@@ -41,11 +41,16 @@ APP_ALIASES = {
     "gaana": "gaana",
     "jiosaavn": "jiosaavn",
     "saavn": "jiosaavn",
+    "wikipedia": "wikipedia",
+    "wiki": "wikipedia",
+    "flipkart": "flipkart",
+    "github": "github",
+    "chatgpt": "chatgpt",
 }
 
 # Apps/sites where a search or play makes sense (used for context decisions).
 MEDIA_APPS = {"youtube", "spotify", "wynk music", "gaana", "jiosaavn", "netflix", "prime video"}
-SEARCH_APPS = MEDIA_APPS | {"google", "amazon", "chrome"}
+SEARCH_APPS = MEDIA_APPS | {"google", "amazon", "chrome", "wikipedia", "flipkart", "github"}
 
 FILLERS = [
     "hey jarvis", "ok jarvis", "okay jarvis", "jarvis", "please", "pls", "plz",

@@ -19,6 +19,7 @@ class Intent(str, Enum):
     OPEN_WEBSITE = "open_website"
     CONTROL_PLAYBACK = "control_playback"
     SYSTEM_CONTROL = "system_control"
+    BROWSER_CONTROL = "browser_control"
     CHAT = "chat"        # just talk, no computer action
     INFO = "info"        # needs live info from the computer (time, date)
     CLARIFY = "clarify"  # brain needs more info from the user
@@ -38,6 +39,7 @@ class Action(str, Enum):
     PREVIOUS = "previous"
     VOLUME = "volume"          # value = up | down | mute | unmute
     SYSTEM = "system"          # value = shutdown | restart | sleep | lock
+    BROWSER = "browser"        # value = new_tab | close_tab | refresh | back | forward | scroll_down | ...
     TYPE_TEXT = "type_text"    # query = text to type
     SPEAK = "speak"            # value = text for TTS
     GET_TIME = "get_time"      # code looks up the current time

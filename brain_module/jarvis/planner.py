@@ -130,6 +130,35 @@ class RulesPlanner:
             if not c:
                 continue
 
+            # --- browser controls (checked before open/close so "open new tab" & "close tab" match here) ---
+            BROWSER_PATTERNS = [
+                (r"^(?:open\s+)?(?:a\s+)?new\s+tab$", "new_tab"),
+                (r"^close\s+(?:this\s+|the\s+|current\s+)?tab$", "close_tab"),
+                (r"^(?:reopen|restore)\s+(?:the\s+)?(?:last\s+|closed\s+)?tab$", "reopen_tab"),
+                (r"^(?:next|switch)\s+tab$", "next_tab"),
+                (r"^(?:previous|prev)\s+tab$", "prev_tab"),
+                (r"^(?:refresh|reload)(?:\s+(?:the\s+|this\s+)?page)?$", "refresh"),
+                (r"^(?:go\s+back|navigate\s+back|browser\s+back)$", "back"),
+                (r"^(?:go\s+forward|navigate\s+forward|forward)$", "forward"),
+                (r"^scroll\s+down(?:\s+(?:a\s+bit|more|page))?$", "scroll_down"),
+                (r"^scroll\s+up(?:\s+(?:a\s+bit|more|page))?$", "scroll_up"),
+                (r"^scroll\s+(?:to\s+)?(?:the\s+)?top$", "scroll_top"),
+                (r"^scroll\s+(?:to\s+)?(?:the\s+)?bottom$", "scroll_bottom"),
+                (r"^zoom\s+in$", "zoom_in"),
+                (r"^zoom\s+out$", "zoom_out"),
+                (r"^(?:reset\s+zoom|normal\s+zoom)$", "zoom_reset"),
+                (r"^(?:open\s+)?(?:new\s+)?incognito(?:\s+(?:window|tab|mode))?$", "incognito"),
+                (r"^(?:open|show)\s+(?:browser\s+)?history$", "history"),
+                (r"^(?:open|show)\s+downloads$", "downloads"),
+                (r"^bookmark(?:\s+(?:this\s+)?page)?$", "bookmark"),
+                (r"^(?:toggle\s+)?full\s*screen$", "fullscreen"),
+            ]
+            matched_browser = next((val for pat, val in BROWSER_PATTERNS if re.match(pat, c)), None)
+            if matched_browser:
+                steps.append(Step(action=Action.BROWSER, target="browser", value=matched_browser))
+                seen.add(Intent.BROWSER_CONTROL)
+                continue
+
             # --- open / go to ---
             m = re.match(r"^(?:open|launch|start|run)\s+(?P<x>.+)$", c)
             if m:
@@ -186,11 +215,18 @@ class RulesPlanner:
                 continue
 
             # --- search ---
-            m = re.match(r"^(?:search(?:\s+for)?|look\s*up|google|find)\s+(?P<rest>.+)$", c)
+            m = re.match(r"^(?:search(?:\s+(?:for|about))?|look\s*up|google|find)\s+(?P<rest>.+)$", c)
             if m:
-                query, app = _split_app(m.group("rest"))
-                if not app:
-                    app = utt_app if utt_app in (SEARCH_APPS - {"chrome"}) else DEFAULT_SEARCH_TARGET
+                rest = m.group("rest").strip()
+                # Handle "in google about X" / "on youtube for X"
+                m_pre = re.match(r"^(?:in|on|using|via)\s+(?P<app>\S+)\s+(?:for|about)\s+(?P<q>.+)$", rest)
+                if m_pre and resolve_app(m_pre.group("app")) in KNOWN_APPS:
+                    app = resolve_app(m_pre.group("app"))
+                    query = m_pre.group("q").strip()
+                else:
+                    query, app = _split_app(rest)
+                    if not app:
+                        app = utt_app if utt_app in (SEARCH_APPS - {"chrome"}) else DEFAULT_SEARCH_TARGET
                 steps.append(Step(action=Action.SEARCH, target=app, query=query))
                 seen.add(Intent.SEARCH_WEB)
                 continue
@@ -260,8 +296,8 @@ class RulesPlanner:
             )
 
         for intent in (
-            Intent.PLAY_MEDIA, Intent.SEARCH_WEB, Intent.OPEN_WEBSITE, Intent.SYSTEM_CONTROL,
-            Intent.CONTROL_PLAYBACK, Intent.CLOSE_APP, Intent.OPEN_APP,
+            Intent.PLAY_MEDIA, Intent.SEARCH_WEB, Intent.OPEN_WEBSITE, Intent.BROWSER_CONTROL,
+            Intent.SYSTEM_CONTROL, Intent.CONTROL_PLAYBACK, Intent.CLOSE_APP, Intent.OPEN_APP,
         ):
             if intent in seen:
                 primary = intent

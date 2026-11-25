@@ -48,6 +48,30 @@ def make_reply(plan: Plan) -> str:
         return f"Opening {first.value}."
     if first.action == Action.VOLUME:
         return f"Volume {first.value}."
+    if first.action == Action.BROWSER:
+        labels = {
+            "new_tab": "Opening a new tab.",
+            "close_tab": "Closing the current tab.",
+            "reopen_tab": "Reopening the closed tab.",
+            "next_tab": "Switching to the next tab.",
+            "prev_tab": "Switching to the previous tab.",
+            "refresh": "Refreshing the page.",
+            "back": "Going back.",
+            "forward": "Going forward.",
+            "scroll_down": "Scrolling down.",
+            "scroll_up": "Scrolling up.",
+            "scroll_top": "Scrolling to the top.",
+            "scroll_bottom": "Scrolling to the bottom.",
+            "zoom_in": "Zooming in.",
+            "zoom_out": "Zooming out.",
+            "zoom_reset": "Resetting zoom.",
+            "incognito": "Opening an incognito window.",
+            "history": "Opening browser history.",
+            "downloads": "Opening downloads.",
+            "bookmark": "Bookmarking this page.",
+            "fullscreen": "Toggling fullscreen.",
+        }
+        return labels.get(first.value or "", "Done.")
     return "Done."
 
 
@@ -91,7 +115,7 @@ class Brain:
         ensure_ollama_running()
         self.ollama_available = self.model.is_reachable()
         if self.mode == "auto":
-            self.mode = "model" if self.ollama_available else "rules"
+            self.mode = "hybrid" if self.ollama_available else "rules"
 
     def plan(self, text: str, session_id: str = "default") -> Dict:
         start = time.perf_counter()
