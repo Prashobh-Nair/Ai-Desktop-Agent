@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Desktop Agent — Jarvis</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --card: #ffffff;
+      --border: #dce1e7;
+      --text: #24292f;
+      --muted: #57606a;
+      --accent: #3b5b7d;       /* soft muted slate-blue */
+      --accent-hover: #2f4966;
+      --user-bg: #e9eff5;
+      --bot-bg: #f8f9fb;
+      --tag-bg: #eef2f6;
+      --danger: #a94442;
+      --ok: #2e6f40;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Header */
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 24px;
+    }
+
+    .header-inner {
+      max-width: 1040px;
+      margin: 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .title-block h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .title-block p {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .status-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .status-pill {
+      font-size: 0.78rem;
+      padding: 4px 10px;
+      border-radius: 4px;
+      background: var(--tag-bg);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .status-pill.ready {
+      color: var(--ok);
+      border-color: #c6dfc9;
+      background: #f2f8f3;
+    }
+
+    /* Main Layout */
+    main {
+      max-width: 1040px;
+      width: 100%;
+      margin: 20px auto;
+      padding: 0 16px;
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 18px;
+    }
+
+    @media (max-width: 820px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Chat Card */
+    .chat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      height: 75vh;
+      min-height: 460px;
+    }
+
+    .chat-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+
+    .btn-link {
+      background: none;
+      border: none;
+      color: var(--accent);
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+
+    .btn-link:hover {
+      text-decoration: underline;
+    }
+
+    .messages {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .msg {
+      max-width: 82%;
+      padding: 10px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 0.93rem;
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      background: var(--user-bg);
+      border-color: #d2dde8;
+    }
+
+    .msg.bot {
+      align-self: flex-start;
+      background: var(--bot-bg);
+    }
+
+    .msg-sender {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 3px;
+    }
+
+    .msg-meta {
+      margin-top: 6px;
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+
+    .action-tag {
+      display: inline-block;
+      margin-top: 6px;
+      margin-right: 4px;
+      padding: 2px 7px;
+      font-size: 0.76rem;
+      background: var(--tag-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+    }
+
+    .confirm-box {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+    }
+
+    /* Input Area */
+    .input-area {
+      border-top: 1px solid var(--border);
+      padding: 12px;
+      display: flex;
+      gap: 8px;
+      background: #fafbfc;
+      border-bottom-left-radius: 6px;
+      border-bottom-right-radius: 6px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 0.93rem;
+      color: var(--text);
+      background: var(--card);
+      outline: none;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--accent);
+    }
+
+    button {
+      padding: 8px 14px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      font-size: 0.88rem;
+      cursor: pointer;
+      background: var(--card);
+      color: var(--text);
+    }
+
+    button:hover:not(:disabled) {
+      background: #eef1f4;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    .btn-recording {
+      background: #f6eaea;
+      color: var(--danger);
+      border-color: #d9b3b2;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .side-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
+
+    .side-card h2 {
+      font-size: 0.92rem;
+      font-weight: 600;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.86rem;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .sample-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .sample-btn {
+      text-align: left;
+      padding: 7px 10px;
+      font-size: 0.83rem;
+      background: #f9fafb;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+    }
+
+    .sample-btn:hover {
+      background: var(--user-bg);
+    }
+
+    footer {
+      text-align: center;
+      padding: 12px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="title-block">
+        <h1>AI-Powered Autonomous Desktop Agent</h1>
+        <p>Semester 5 Minor Project — Speech-to-Text, Brain &amp; OS Automation, Text-to-Speech</p>
+      </div>
+      <div class="status-row">
+        <span class="status-pill" id="pill-stt">STT: Loading...</span>
+        <span class="status-pill" id="pill-brain">Brain: Loading...</span>
+        <span class="status-pill" id="pill-tts">TTS: Loading...</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Chat & Command Panel -->
+    <section class="chat-card">
+      <div class="chat-header">
+        <span>Assistant Console</span>
+        <button class="btn-link" id="clear-btn">Clear Chat</button>
+      </div>
+
+      <div class="messages" id="messages">
+        <div class="msg bot">
+          <div class="msg-sender">Jarvis</div>
+          <div>Hello! You can type a command, click a sample on the right, or click <strong>Speak</strong> to use your microphone.</div>
+        </div>
+      </div>
+
+      <form class="input-area" id="chat-form">
+        <input
+          type="text"
+          id="text-input"
+          placeholder="Type a command or question (e.g., open chrome, explain how a plane flies)..."
+          autocomplete="off"
+        />
+        <button type="button" id="mic-btn">Speak</button>
+        <button type="submit" class="btn-primary" id="send-btn">Send</button>
+      </form>
+    </section>
+
+    <!-- Sidebar Controls & Examples -->
+    <aside class="sidebar">
+      <div class="side-card">
+        <h2>Settings</h2>
+        <label class="setting-row">
+          <input type="checkbox" id="tts-toggle" checked />
+          <span>Speak replies aloud (Kokoro TTS)</span>
+        </label>
+      </div>
+
+      <div class="side-card">
+        <h2>Try Sample Commands</h2>
+        <div class="sample-list">
+          <button type="button" class="sample-btn" data-cmd="open chrome">Open Chrome</button>
+          <button type="button" class="sample-btn" data-cmd="open new tab">Open New Tab</button>
+          <button type="button" class="sample-btn" data-cmd="search in google about poco x6 neo">Search Google: Poco X6 Neo</button>
+          <button type="button" class="sample-btn" data-cmd="play believer on youtube">Play Believer on YouTube</button>
+          <button type="button" class="sample-btn" data-cmd="what is the time">What is the time?</button>
+          <button type="button" class="sample-btn" data-cmd="Explain how a plane flies.">Explain how a plane flies</button>
+          <button type="button" class="sample-btn" data-cmd="Tell me a funny joke.">Tell me a joke</button>
+        </div>
+      </div>
+
+      <div class="side-card">
+        <h2>Team Modules</h2>
+        <p style="font-size: 0.82rem; color: var(--muted); line-height: 1.6;">
+          <strong>Module 1 (STT):</strong> Prashobh Nair<br />
+          <strong>Module 2 (Brain):</strong> Sahaj Patel<br />
+          <strong>Module 3 (TTS):</strong> Zeel Vasoya<br />
+          <strong>Module 4 (OS / UI):</strong> Mayank
+        </p>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    Navrachana University &middot; B.Tech Computer Science &middot; 100% Local Offline Execution
+  </footer>
+
+  <audio id="tts-player" hidden></audio>
+
+  <script>
+    const messagesEl = document.getElementById("messages");
+    const formEl = document.getElementById("chat-form");
+    const inputEl = document.getElementById("text-input");
+    const sendBtn = document.getElementById("send-btn");
+    const micBtn = document.getElementById("mic-btn");
+    const clearBtn = document.getElementById("clear-btn");
+    const ttsToggle = document.getElementById("tts-toggle");
+    const audioPlayer = document.getElementById("tts-player");
+
+    let isRecording = false;
+    let audioCtx = null;
+    let mediaStream = null;
+    let processor = null;
+    let recordedSamples = [];
+
+    // Load module status
+    async function loadStatus() {
+      try {
+        const res = await fetch("/api/status");
+        const data = await res.json();
+        document.getElementById("pill-stt").textContent = "STT: " + data.stt;
+        document.getElementById("pill-stt").classList.add("ready");
+        document.getElementById("pill-brain").textContent =
+          "Brain: " + data.brain_mode + (data.ollama_active ? " (LLM)" : " (Rules)");
+        document.getElementById("pill-brain").classList.add("ready");
+        document.getElementById("pill-tts").textContent = "TTS: " + data.tts;
+        document.getElementById("pill-tts").classList.add("ready");
+      } catch {
+        document.getElementById("pill-brain").textContent = "Brain: Offline";
+      }
+    }
+    loadStatus();
+
+    function addMessage(sender, text, options = {}) {
+      const div = document.createElement("div");
+      div.className = "msg " + (sender === "You" ? "user" : "bot");
+
+      const header = document.createElement("div");
+      header.className = "msg-sender";
+      header.textContent = sender;
+      div.appendChild(header);
+
+      const body = document.createElement("div");
+      body.textContent = text;
+      div.appendChild(body);
+
+      if (options.actions && options.actions.length) {
+        const actionsWrap = document.createElement("div");
+        options.actions.forEach((act) => {
+          const tag = document.createElement("span");
+          tag.className = "action-tag";
+          tag.textContent = act;
+          actionsWrap.appendChild(tag);
+        });
+        div.appendChild(actionsWrap);
+      }
+
+      if (options.needsConfirmation && options.confirmId) {
+        const box = document.createElement("div");
+        box.className = "confirm-box";
+
+        const yesBtn = document.createElement("button");
+        yesBtn.type = "button";
+        yesBtn.className = "btn-primary";
+        yesBtn.textContent = "Confirm";
+        yesBtn.onclick = () => handleConfirm(options.confirmId, true, box);
+
+        const noBtn = document.createElement("button");
+        noBtn.type = "button";
+        noBtn.textContent = "Cancel";
+        noBtn.onclick = () => handleConfirm(options.confirmId, false, box);
+
+        box.appendChild(yesBtn);
+        box.appendChild(noBtn);
+        div.appendChild(box);
+      }
+
+      if (options.meta) {
+        const meta = document.createElement("div");
+        meta.className = "msg-meta";
+        meta.textContent = options.meta;
+        div.appendChild(meta);
+      }
+
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    function playReplyAudio(url) {
+      if (url && ttsToggle.checked) {
+        audioPlayer.src = url;
+        audioPlayer.play().catch(() => {});
+      }
+    }
+
+    async function handleConfirm(confirmId, approved, boxEl) {
+      boxEl.innerHTML = "<span class='msg-meta'>Processing...</span>";
+      try {
+        const res = await fetch("/api/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            confirm_id: confirmId,
+            approved,
+            speak_reply: ttsToggle.checked,
+          }),
+        });
+        const data = await res.json();
+        boxEl.remove();
+        addMessage("Jarvis", data.reply, { actions: data.actions });
+        playReplyAudio(data.audio_url);
+      } catch {
+        boxEl.textContent = "Failed to send confirmation.";
+      }
+    }
+
+    async function sendText(text) {
+      if (!text.trim()) return;
+      addMessage("You", text);
+      inputEl.value = "";
+      sendBtn.disabled = true;
+
+      const thinking = addMessage("Jarvis", "Thinking...");
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, speak_reply: ttsToggle.checked }),
+        });
+        const data = await res.json();
+        thinking.remove();
+        addMessage("Jarvis", data.reply, {
+          actions: data.actions,
+          needsConfirmation: data.needs_confirmation,
+          confirmId: data.confirm_id,
+          meta: `Intent: ${data.intent} | Engine: ${data.backend} | ${data.latency_ms} ms`,
+        });
+        playReplyAudio(data.audio_url);
+      } catch {
+        thinking.remove();
+        addMessage("Jarvis", "Could not connect to the backend server.");
+      } finally {
+        sendBtn.disabled = false;
+        inputEl.focus();
+      }
+    }
+
+    formEl.addEventListener("submit", (e) => {
+      e.preventDefault();
+      sendText(inputEl.value);
+    });
+
+    document.querySelectorAll(".sample-btn").forEach((btn) => {
+      btn.addEventListener("click", () => sendText(btn.dataset.cmd));
+    });
+
+    clearBtn.addEventListener("click", () => {
+      messagesEl.innerHTML = "";
+      addMessage("Jarvis", "Chat cleared. How can I help you?");
+    });
+
+    // Encode Float32 PCM samples into a 16kHz mono WAV Blob
+    function encodeWav(samples, inputRate) {
+      const targetRate = 16000;
+      const ratio = inputRate / targetRate;
+      const newLen = Math.round(samples.length / ratio);
+      const downsampled = new Float32Array(newLen);
+      for (let i = 0; i < newLen; i++) {
+        downsampled[i] = samples[Math.min(Math.round(i * ratio), samples.length - 1)];
+      }
+
+      const buffer = new ArrayBuffer(44 + downsampled.length * 2);
+      const view = new DataView(buffer);
+      const writeStr = (off, str) => {
+        for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+      };
+
+      writeStr(0, "RIFF");
+      view.setUint32(4, 36 + downsampled.length * 2, true);
+      writeStr(8, "WAVE");
+      writeStr(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, targetRate, true);
+      view.setUint32(28, targetRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, "data");
+      view.setUint32(40, downsampled.length * 2, true);
+
+      let offset = 44;
+      for (let i = 0; i < downsampled.length; i++) {
+        const s = Math.max(-1, Math.min(1, downsampled[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        offset += 2;
+      }
+      return new Blob([buffer], { type: "audio/wav" });
+    }
+
+    micBtn.addEventListener("click", async () => {
+      if (!isRecording) {
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const source = audioCtx.createMediaStreamSource(mediaStream);
+          processor = audioCtx.createScriptProcessor(4096, 1, 1);
+          recordedSamples = [];
+
+          processor.onaudioprocess = (e) => {
+            recordedSamples.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+          };
+
+          source.connect(processor);
+          processor.connect(audioCtx.destination);
+
+          isRecording = true;
+          micBtn.textContent = "Stop";
+          micBtn.classList.add("btn-recording");
+        } catch {
+          addMessage("Jarvis", "Microphone access was denied or unavailable.");
+        }
+      } else {
+        isRecording = false;
+        micBtn.textContent = "Speak";
+        micBtn.classList.remove("btn-recording");
+
+        const sampleRate = audioCtx.sampleRate;
+        processor.disconnect();
+        mediaStream.getTracks().forEach((t) => t.stop());
+        audioCtx.close();
+
+        const totalLen = recordedSamples.reduce((acc, arr) => acc + arr.length, 0);
+        const merged = new Float32Array(totalLen);
+        let pos = 0;
+        for (const chunk of recordedSamples) {
+          merged.set(chunk, pos);
+          pos += chunk.length;
+        }
+
+        const wavBlob = encodeWav(merged, sampleRate);
+        const formData = new FormData();
+        formData.append("audio", wavBlob, "mic.wav");
+        formData.append("speak_reply", ttsToggle.checked ? "true" : "false");
+
+        const thinking = addMessage("Jarvis", "Transcribing and thinking...");
+        try {
+          const res = await fetch("/api/voice", { method: "POST", body: formData });
+          const data = await res.json();
+          thinking.remove();
+          if (data.user_text) {
+            addMessage("You", data.user_text);
+          }
+          addMessage("Jarvis", data.reply, {
+            actions: data.actions,
+            needsConfirmation: data.needs_confirmation,
+            confirmId: data.confirm_id,
+            meta: `Intent: ${data.intent} | Engine: ${data.backend} | ${data.latency_ms} ms`,
+          });
+          playReplyAudio(data.audio_url);
+        } catch {
+          thinking.remove();
+          addMessage("Jarvis", "Failed to process voice input.");
+        }
+      }
+    });
+  </script>
+</body>
+</html>
