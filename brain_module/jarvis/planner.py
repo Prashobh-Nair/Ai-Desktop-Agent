@@ -137,7 +137,7 @@ class RulesPlanner:
             return Plan(intent=Intent.OPEN_WEBSITE, steps=[Step(action=Action.GIT_OP, value="open_github")], reply="Opening GitHub repository.", confidence=1.0)
         if re.search(r"\b(?:my\s+schedule|upcoming\s+events|show\s+calendar|check\s+calendar)\b", clean_raw):
             return Plan(intent=Intent.INFO, steps=[Step(action=Action.CALENDAR_OP, value="list")], reply="Checking your calendar.", confidence=1.0)
-        m_w = re.search(r"\bweather(?:\s+in\s+(?P<city>[a-z\s]+))?$", clean_raw)
+        m_w = re.match(r"^(?:what(?:'s|\s+is)\s+(?:the\s+)?|check\s+|tell\s+(?:me\s+)?(?:the\s+)?)?weather(?:\s+in\s+(?P<city>[a-z\s]+))?$", clean_raw)
         if m_w:
             city = (m_w.group("city") or "").strip()
             return Plan(intent=Intent.INFO, steps=[Step(action=Action.WEB_FETCH, target="weather", query=city)], reply="Checking the weather.", confidence=1.0)
