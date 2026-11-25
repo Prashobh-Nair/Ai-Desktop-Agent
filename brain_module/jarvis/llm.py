@@ -82,6 +82,81 @@ def _load_env_file() -> None:
         pass
 
 
+class GroqBrainModel:
+    """Ultra-fast cloud Brain backed by Groq (Llama 3.3 70B)."""
+
+    ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+
+    def __init__(self, api_key: str | None = None, model_name: str = "llama-3.3-70b-versatile", timeout: float = 8.0):
+        _load_env_file()
+        self.api_key = (api_key or os.getenv("GROQ_API_KEY", "")).strip()
+        self.model_name = model_name
+        self.timeout = timeout
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.api_key and self.api_key != "your_groq_api_key_here")
+
+    def _generate(
+        self,
+        system_prompt: str,
+        user_text: str,
+        json_mode: bool = False,
+        history: list[dict] | None = None,
+        memory_context: list[str] | None = None,
+    ) -> str:
+        if not self.is_configured:
+            raise ModelUnavailable("GROQ_API_KEY is not configured.")
+
+        full_sys = system_prompt
+        if memory_context:
+            full_sys += "\n\nRelevant Memory Context:\n" + "\n".join(memory_context)
+
+        messages = [{"role": "system", "content": full_sys}]
+        if history:
+            for msg in history[-10:]:
+                role = "assistant" if msg.get("role") == "assistant" else "user"
+                messages.append({"role": role, "content": msg.get("content", "")})
+        messages.append({"role": "user", "content": user_text})
+
+        payload: dict = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": 0.2 if json_mode else 0.4,
+            "max_tokens": 400,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        req = urllib.request.Request(
+            self.ENDPOINT,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "Jarvis-Desktop-Agent/1.0",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                data = json.loads(resp.read())
+                return data["choices"][0]["message"]["content"].strip()
+        except urllib.error.HTTPError as e:
+            raise ModelUnavailable(f"Groq error {e.code}: {e.read().decode(errors='ignore')[:200]}") from e
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, KeyError, IndexError) as e:
+            raise ModelUnavailable(str(e)) from e
+
+    def chat_answer(self, text: str, history: list[dict] | None = None, memory_context: list[str] | None = None) -> str:
+        return self._generate(CHAT_SYSTEM_PROMPT, text, json_mode=False, history=history, memory_context=memory_context)
+
+    def plan(self, text: str, history: list[dict] | None = None, memory_context: list[str] | None = None) -> Plan:
+        raw = self._generate(UNIFIED_GEMINI_PROMPT, text, json_mode=True, history=history, memory_context=memory_context)
+        try:
+            return Plan.model_validate_json(raw)
+        except ValidationError as e:
+            raise BadModelOutput(f"Groq output did not match Plan schema: {e}") from e
+
+
 class GeminiModel:
     """Fast cloud Brain backed by Google Gemini (3.1 Flash Lite)."""
 

@@ -16,7 +16,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from .llm import BadModelOutput, GeminiModel, JarvisModel, ModelUnavailable
+from .llm import BadModelOutput, GeminiModel, GroqBrainModel, JarvisModel, ModelUnavailable
 from .schema import Action, Intent, Plan, enforce_safety
 from src.memory_manager import MemoryManager
 
@@ -118,26 +118,36 @@ def ensure_ollama_running() -> bool:
 class Brain:
     def __init__(self, mode: Optional[str] = None):
         self.mode = (mode or os.getenv("BRAIN_MODE", "auto")).lower()
+        self.groq = GroqBrainModel()
         self.gemini = GeminiModel()
         self.model = JarvisModel()
         self.memory = MemoryManager()
         self.sessions: Dict[str, Dict] = {}   # remembers the last app per user/session
 
+        self.groq_available = self.groq.is_configured
         self.gemini_available = self.gemini.is_configured
-        # Only start heavy local Ollama if Gemini is not configured (saves ~1.6GB RAM!)
-        if self.gemini_available and self.mode != "model":
+        # Only start heavy local Ollama if no cloud LLM is configured (saves ~1.6GB RAM!)
+        if (self.groq_available or self.gemini_available) and self.mode != "model":
             self.ollama_available = False
         else:
             ensure_ollama_running()
             self.ollama_available = self.model.is_reachable()
 
         if self.mode == "auto":
-            self.mode = "gemini" if self.gemini_available else "model"
+            if self.groq_available:
+                self.mode = "groq"
+            elif self.gemini_available:
+                self.mode = "gemini"
+            else:
+                self.mode = "model"
 
     def _active_llm(self):
-        """Returns (backend_name, llm_client) preferring Gemini, with Ollama fallback."""
-        if self.mode != "model" and self.gemini_available:
-            return "gemini", self.gemini
+        """Returns (backend_name, llm_client) preferring Groq (fastest), then Gemini, then Ollama."""
+        if self.mode != "model":
+            if self.groq_available:
+                return "groq", self.groq
+            if self.gemini_available:
+                return "gemini", self.gemini
         if self.ollama_available:
             return "model", self.model
         return None, None
@@ -163,8 +173,8 @@ class Brain:
 
         if llm is not None:
             try:
-                if backend_name == "gemini":
-                    plan, used = llm.plan(text, history=history, memory_context=mem_context), "gemini"
+                if backend_name in ("groq", "gemini"):
+                    plan, used = llm.plan(text, history=history, memory_context=mem_context), backend_name
                 elif _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
                     answer = llm.chat_answer(text)
                     plan, used = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0), backend_name
@@ -173,11 +183,21 @@ class Brain:
 
                 has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
                 if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
-                    answer = llm.chat_answer(text, history=history, memory_context=mem_context) if backend_name == "gemini" else llm.chat_answer(text)
+                    answer = llm.chat_answer(text, history=history, memory_context=mem_context) if backend_name in ("groq", "gemini") else llm.chat_answer(text)
                     plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
             except (ModelUnavailable, BadModelOutput) as e:
-                # Automatic offline fallback to local Ollama if Gemini fails
-                if backend_name == "gemini":
+                # Fallback chain: Groq -> Gemini -> Local Ollama
+                if backend_name == "groq" and self.gemini_available:
+                    try:
+                        plan, used = self.gemini.plan(text, history=history, memory_context=mem_context), "gemini"
+                        has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
+                        if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
+                            answer = self.gemini.chat_answer(text, history=history, memory_context=mem_context)
+                            plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
+                    except (ModelUnavailable, BadModelOutput) as eg:
+                        e = eg
+                        backend_name = "gemini"
+                if used == "unavailable" and backend_name in ("groq", "gemini"):
                     ensure_ollama_running()
                     if self.model.is_reachable():
                         self.ollama_available = True

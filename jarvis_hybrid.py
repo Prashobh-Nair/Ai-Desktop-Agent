@@ -99,10 +99,10 @@ def listen_utterance(threshold: float, silence_timeout: float = 1.25, max_second
     return np.concatenate(speech_chunks) if speech_chunks else None
 
 
-def _speak_edge_tts_ram(text: str, voice: str = "en-IN-PrabhatNeural") -> bool:
+def _speak_edge_tts_ram(text: str, voice: str = "en-IN-PrabhatNeural", rate: str = "+18%") -> bool:
     """Synthesizes Edge TTS audio in RAM and plays it synchronously via sounddevice."""
     async def _fetch() -> bytes:
-        comm = edge_tts.Communicate(text, voice)
+        comm = edge_tts.Communicate(text, voice, rate=rate)
         buf = io.BytesIO()
         async for chunk in comm.stream():
             if chunk["type"] == "audio":
@@ -179,9 +179,14 @@ def main() -> None:
     fallback_tts = _init_fallback_tts()
 
     stt_mode = "Groq Whisper large-v3-turbo (API) -> Local Whisper" if stt.groq_engine.is_configured else "Local Whisper-Small.en (244M)"
-    brain_mode = "Gemini (API) -> Local Ollama" if brain.gemini_available else "Local Ollama"
+    if getattr(brain, "groq_available", False):
+        brain_mode = "Groq Llama-3.3-70B (Fast API) -> Gemini -> Local Ollama"
+    elif brain.gemini_available:
+        brain_mode = "Gemini (API) -> Local Ollama"
+    else:
+        brain_mode = "Local Ollama"
     print(f"  STT   : {stt_mode}")
-    print(f"  Brain : {brain_mode} (No RulesPlanner)")
+    print(f"  Brain : {brain_mode}")
     print("  Vision: Gemini Vision (API) -> Local SmolVLM-256M")
     print("  TTS   : Edge-TTS en-IN-PrabhatNeural (RAM) -> Local Fallback")
     print("============================================================\n")
@@ -213,12 +218,11 @@ def main() -> None:
                         mem_terms.extend(re.findall(r"\b[A-Z][a-zA-Z0-9_-]{2,}\b", item.get("fact", "")))
                 except Exception:
                     pass
-                t_stt = time.time()
                 res = stt.transcribe_with_metadata(audio, hotwords=build_hotwords(mem_terms))
                 recognized_text = res["text"].strip()
                 if not recognized_text:
                     continue
-                print(f">>> YOU    : \"{recognized_text}\" ({res['model_name']}, {time.time() - t_stt:.2f}s)")
+                print(f">>> YOU    : \"{recognized_text}\"")
 
             lower_cmd = recognized_text.lower().strip(".,!? ")
             if lower_cmd in ("exit", "quit", "bye jarvis", "goodbye", "shut down jarvis"):
@@ -257,7 +261,7 @@ def main() -> None:
                 if outputs:
                     reply = " ".join(o for o in outputs if o)
 
-            print(f">>> JARVIS : \"{reply}\" [{plan_res['backend']}]")
+            print(f">>> JARVIS : \"{reply}\"")
             speak_reply(reply, fallback_tts)
             time.sleep(0.2)
 
