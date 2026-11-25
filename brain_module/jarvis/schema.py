@@ -57,6 +57,7 @@ class Action(str, Enum):
     GIT_OP = "git_op"          # value = status | log | open_github
     CALENDAR_OP = "calendar_op"  # value = add | list | open_gmail | open_calendar
     WEB_FETCH = "web_fetch"    # target = weather | wikipedia, query = search
+    PLUGIN_OP = "plugin_op"    # value = create | list | enable | disable | remove | reconnect | capabilities | health | use
 
 
 class Step(BaseModel):

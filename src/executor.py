@@ -712,7 +712,7 @@ class ActionExecutor:
         except Exception as e:
             return f"Terminal command failed: {e}"
 
-    def execute_plan(self, plan: Dict, memory=None, vision=None) -> List[str]:
+    def execute_plan(self, plan: Dict, memory=None, vision=None, plugin_manager=None) -> List[str]:
         """Executes all steps in a Brain Plan dictionary in order and returns status logs."""
         steps = plan.get("steps") or []
         if not steps:
@@ -848,6 +848,11 @@ class ActionExecutor:
                 logs.append(calendar_op(value or "list", query or target, target))
             elif action == "web_fetch":
                 logs.append(web_fetch(query or target, target or "weather"))
+            elif action == "plugin_op":
+                if plugin_manager is not None:
+                    logs.append(plugin_manager.handle_action(value or "list", target, query))
+                else:
+                    logs.append("Plugin manager is not attached.")
             elif action == "memory_op" and memory is not None:
                 op = (value or "list").lower()
                 if op == "remember":

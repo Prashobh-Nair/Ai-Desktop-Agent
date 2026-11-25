@@ -79,6 +79,13 @@ UNIFIED_GEMINI_PROMPT = (
     "   - git_op (value: status|log|open_github)\n"
     "   - calendar_op (value: add|list|open_gmail|open_calendar, query: title, target: when)\n"
     "   - web_fetch (target: weather|wikipedia, query: city or topic)\n"
+    "   - plugin_op (value: create|list|enable|disable|remove|reconnect|capabilities|health|use, target: plugin/app name like gmail|github|notion|spotify, query: task when value='use')\n"
+    "     ALWAYS use plugin_op (NEVER close_app/see_screen/chat) for plugin management OR checking external accounts:\n"
+    "     * 'create/connect/add plugin for X' -> plugin_op(value='create', target='X')\n"
+    "     * 'show/list connected/available plugins' -> plugin_op(value='list')\n"
+    "     * 'enable/disable/remove/reconnect X plugin/integration' -> plugin_op(value='enable'|'disable'|'remove'|'reconnect', target='X')\n"
+    "     * 'what can you do with X plugin' -> plugin_op(value='capabilities', target='X')\n"
+    "     * 'check my Gmail / summarise emails / check GitHub commits' -> plugin_op(value='use', target='gmail'|'github', query='...') (emit multiple plugin_op steps if user asks for multiple services)\n"
     "   - system (value: shutdown|restart|sleep|lock -> set needs_confirmation=true)\n"
     "   - get_time | get_date\n"
 )

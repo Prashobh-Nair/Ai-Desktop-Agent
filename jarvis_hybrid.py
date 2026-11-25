@@ -38,6 +38,7 @@ from brain_module.jarvis.brain import Brain
 from inference import SpeechRecognizer
 from src.autonomous import AutonomousGoalRunner, BackgroundTaskManager
 from src.executor import ActionExecutor
+from src.plugin_manager import PluginManager
 from src.vision_engine import LocalScreenVision
 from src.whisper_engine import build_hotwords
 
@@ -174,6 +175,7 @@ def main() -> None:
     vision = LocalScreenVision()
     vision.start_live_watch(interval=2.5)
     executor = ActionExecutor()
+    plugin_manager = PluginManager()
     bg_manager = BackgroundTaskManager()
     goal_runner = AutonomousGoalRunner(brain, executor, vision=vision)
     stt = SpeechRecognizer(model_size="small.en")
@@ -267,16 +269,45 @@ def main() -> None:
                         speak_reply(reply, fallback_tts)
                         continue
 
-                outputs = executor.execute_plan(plan, memory=brain.memory, vision=vision)
+                outputs = executor.execute_plan(plan, memory=brain.memory, vision=vision, plugin_manager=plugin_manager)
                 if outputs:
-                    info_actions = {"see_screen", "get_time", "get_date", "web_fetch", "file_op", "git_op", "memory_op", "calendar_op", "run_terminal"}
-                    has_info = any(s.get("action") in info_actions for s in steps)
-                    err_outputs = [o for o in outputs if o and any(k in o.lower() for k in ("could not", "failed", "not found", "unavailable", "screen check:"))]
-                    if err_outputs:
-                        reply = " ".join(err_outputs)
-                    elif has_info:
-                        info_outs = [o for s, o in zip(steps, outputs) if o and s.get("action") in info_actions]
-                        reply = " ".join(info_outs) if info_outs else " ".join(o for o in outputs if o)
+                    # Handle on-demand plugin creation / reconnection interactively
+                    setup_marker = next((o for o in outputs if o and o.startswith("__SETUP_PLUGIN__:")), None)
+                    if setup_marker:
+                        app_to_setup = setup_marker.split(":", 1)[1].strip() or "custom"
+                        reply = plugin_manager.interactive_setup(
+                            app_to_setup,
+                            speak_fn=lambda m: (print(f">>> JARVIS : \"{m}\""), speak_reply(m, fallback_tts)),
+                        )
+                    else:
+                        info_actions = {"see_screen", "get_time", "get_date", "web_fetch", "file_op", "git_op", "memory_op", "calendar_op", "run_terminal", "plugin_op"}
+                        has_info = any(s.get("action") in info_actions for s in steps)
+                        err_outputs = [o for o in outputs if o and any(k in o.lower() for k in ("could not", "failed", "not found", "unavailable", "screen check:"))]
+                        if err_outputs:
+                            reply = " ".join(err_outputs)
+                        elif has_info:
+                            info_outs = [o for s, o in zip(steps, outputs) if o and s.get("action") in info_actions]
+                            reply = " ".join(info_outs) if info_outs else " ".join(o for o in outputs if o)
+
+                        # If user tried to use an unconfigured plugin, offer to set it up now
+                        if "integration set up yet. Want to configure it?" in reply:
+                            print(f">>> JARVIS : \"{reply}\"")
+                            speak_reply(reply, fallback_tts)
+                            if args.text:
+                                ans = input("Configure now (yes/no) > ").strip().lower()
+                            else:
+                                print("[MIC ON] Waiting for reply...", flush=True)
+                                c_audio = listen_utterance(threshold, silence_timeout=1.0, max_seconds=6.0)
+                                print("[MIC OFF]", flush=True)
+                                ans = stt.transcribe_with_metadata(c_audio)["text"].lower() if c_audio is not None and len(c_audio) >= 1600 else ""
+                            if any(w in ans for w in ("yes", "yeah", "sure", "ok", "okay", "configure", "set it up")):
+                                target_app = next((s.get("target") for s in steps if s.get("action") == "plugin_op"), "") or "custom"
+                                reply = plugin_manager.interactive_setup(
+                                    target_app,
+                                    speak_fn=lambda m: (print(f">>> JARVIS : \"{m}\""), speak_reply(m, fallback_tts)),
+                                )
+                            else:
+                                reply = "No worries, we can set it up anytime."
 
             print(f">>> JARVIS : \"{reply}\"")
             speak_reply(reply, fallback_tts)
