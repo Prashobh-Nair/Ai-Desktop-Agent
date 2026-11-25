@@ -1,13 +1,13 @@
 """
-Autonomous AI Desktop Agent - Phase 1: Conversational JARVIS
-Pipeline:
-  [CONTINUOUS MIC / "Hey Jarvis"] -> [1: Faster-Whisper 244M] -> [2: Hybrid Brain + Memory] -> [3: Interruptible TTS] -> [OS/Browser/Vision]
+Autonomous AI Desktop Agent - Fully Automatic Hands-Free JARVIS
+Strict Microphone Lifecycle (No Wake Word):
+  [1. MIC ON: Listen for command]
+       -> User finishes speaking
+  [2. MIC OFF: Transcribe (Whisper) -> Brain -> Execute Tasks -> Speak Reply (TTS)]
+       -> JARVIS finishes speaking completely
+  [3. MIC ON: Automatically listen for next command]
 
-Features:
-- Wake word: "Hey Jarvis" (with 25s active follow-up conversation window)
-- Continuous hands-free voice listening with auto-calibrated noise floor
-- Interruptions while speaking (voice barge-in or Space/Enter key)
-- 100% RAM-only audio streaming (zero disk clutter)
+Important: Microphone is NEVER active during AI processing, task execution, or TTS playback.
 """
 
 import argparse
@@ -19,14 +19,12 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
 
-import msvcrt
 import queue
 import re
 import subprocess
-import threading
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import sounddevice as sd
@@ -44,25 +42,10 @@ from brain_module.jarvis.brain import Brain
 
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = int(SAMPLE_RATE * 0.1)  # 100ms chunks
-ACTIVE_WINDOW_SECS = 25.0
-
-WAKE_RE = re.compile(
-    r"^(?:hey|ok|okay|hi|hello|yo)?\s*,?\s*jarvis\b[\s,.:;!?-]*(?P<rest>.*)$",
-    re.IGNORECASE,
-)
-
-
-def extract_wake_command(text: str) -> Tuple[bool, str]:
-    """Checks if text invokes 'Hey Jarvis' and returns (triggered, remaining_command)."""
-    clean = (text or "").strip()
-    m = WAKE_RE.match(clean)
-    if m:
-        return True, (m.group("rest") or "").strip()
-    return False, clean
 
 
 def calibrate_noise_floor(seconds: float = 0.8) -> float:
-    """Measures ambient room noise RMS and returns a speech threshold."""
+    """Measures ambient room noise RMS and returns a speech detection threshold."""
     frames = []
     num_chunks = max(3, int(seconds / 0.1))
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=CHUNK_SAMPLES) as stream:
@@ -73,98 +56,49 @@ def calibrate_noise_floor(seconds: float = 0.8) -> float:
     return max(0.014, min(0.06, ambient * 2.6))
 
 
-def _monitor_barge_in(stop_event: threading.Event, barge_threshold: float) -> None:
-    """Stops TTS playback if user presses Space/Enter or speaks loudly over Jarvis."""
-    start_t = time.monotonic()
-    loud_chunks = 0
-    try:
-        with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=CHUNK_SAMPLES) as stream:
-            while not stop_event.is_set():
-                if msvcrt.kbhit():
-                    key = msvcrt.getch()
-                    if key in (b" ", b"\r", b"\n"):
-                        stop_event.set()
-                        break
-
-                data, _ = stream.read(CHUNK_SAMPLES)
-                # Brief 0.45s guard to avoid speaker startup click
-                if time.monotonic() - start_t < 0.45:
-                    continue
-                rms = float(np.sqrt(np.mean(data ** 2)))
-                if rms > barge_threshold:
-                    loud_chunks += 1
-                    if loud_chunks >= 3:  # ~300ms sustained speech
-                        stop_event.set()
-                        break
-                else:
-                    loud_chunks = 0
-    except Exception:
-        pass
-
-
-def speak_reply(text: str, tts_engine=None, barge_threshold: float = 0.06) -> bool:
+def speak_reply(text: str, tts_engine=None) -> None:
     """
-    Speaks text in memory (RAM-only, zero disk files) with interruption support.
-    Returns True if interrupted by the user, False if finished normally.
+    Speaks text completely in memory (RAM-only, zero disk files) with MIC strictly OFF.
+    Blocks until audio playback finishes completely.
     """
     clean = " ".join((text or "").split())
     if not clean:
-        return False
+        return
 
-    stop_event = threading.Event()
-    interrupted = False
-    monitor = threading.Thread(
-        target=_monitor_barge_in, args=(stop_event, barge_threshold), daemon=True
+    if tts_engine is not None and getattr(tts_engine, "_kokoro", None) is not None:
+        try:
+            processed = tts_engine.text_processor.preprocess_text(clean)
+            samples, sr = tts_engine._kokoro.create(
+                processed,
+                voice=tts_engine.config.voice,
+                speed=tts_engine.config.speed,
+                lang=tts_engine.config.lang,
+            )
+            sd.play(samples, sr)
+            sd.wait()
+            return
+        except Exception:
+            pass
+
+    safe = clean.replace("'", "''")
+    ps_cmd = (
+        "Add-Type -AssemblyName System.Speech; "
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$s.Rate = 1; $s.Speak('{safe}')"
     )
-    monitor.start()
-
-    try:
-        if tts_engine is not None and getattr(tts_engine, "_kokoro", None) is not None:
-            try:
-                processed = tts_engine.text_processor.preprocess_text(clean)
-                samples, sr = tts_engine._kokoro.create(
-                    processed,
-                    voice=tts_engine.config.voice,
-                    speed=tts_engine.config.speed,
-                    lang=tts_engine.config.lang,
-                )
-                sd.play(samples, sr)
-                stream = sd.get_stream()
-                while stream is not None and stream.active:
-                    if stop_event.is_set():
-                        sd.stop()
-                        interrupted = True
-                        break
-                    time.sleep(0.05)
-                return interrupted
-            except Exception:
-                pass
-
-        safe = clean.replace("'", "''")
-        ps_cmd = (
-            "Add-Type -AssemblyName System.Speech; "
-            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            f"$s.Rate = 1; $s.Speak('{safe}')"
-        )
-        proc = subprocess.Popen(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=0x08000000,
-        )
-        while proc.poll() is None:
-            if stop_event.is_set():
-                proc.terminate()
-                interrupted = True
-                break
-            time.sleep(0.05)
-        return interrupted
-    finally:
-        stop_event.set()
+    subprocess.run(
+        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=0x08000000,
+    )
 
 
 def listen_utterance(threshold: float, max_seconds: float = 15.0) -> Optional[np.ndarray]:
-    """Continuously listens in RAM until a complete spoken utterance is captured."""
+    """
+    Turns microphone ON, waits for a spoken command, and closes the microphone
+    immediately once the user finishes speaking (~1.1s trailing silence).
+    """
     audio_q: queue.Queue[np.ndarray] = queue.Queue()
 
     def callback(indata, _frames, _time_info, _status):
@@ -209,6 +143,7 @@ def listen_utterance(threshold: float, max_seconds: float = 15.0) -> Optional[np
                 if silence_hits >= 11 or len(speech_frames) >= max_chunks:  # ~1.1s silence
                     break
 
+    # Microphone stream is now completely CLOSED (OFF)
     if not speech_frames:
         return None
 
@@ -220,8 +155,8 @@ def listen_utterance(threshold: float, max_seconds: float = 15.0) -> Optional[np
 
 
 def record_audio_interactive(sample_rate: int = 16000) -> Optional[np.ndarray]:
-    """Push-to-talk fallback: records audio in RAM until Enter is pressed."""
-    print("\n>>> [RECORDING] Speak now... [PRESS ENTER WHEN DONE] >>> ", end="", flush=True)
+    """Optional push-to-talk fallback: records audio in RAM until Enter is pressed."""
+    print("\n>>> [MIC ON] Speak now... [PRESS ENTER WHEN DONE] >>> ", end="", flush=True)
     recorded_frames = []
 
     def audio_callback(indata, _frames, _time_info, _status):
@@ -244,12 +179,12 @@ def record_audio_interactive(sample_rate: int = 16000) -> Optional[np.ndarray]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Live Conversational Jarvis")
-    parser.add_argument("--push-to-talk", action="store_true", help="Use Enter-key push-to-talk instead of continuous wake-word listening")
+    parser = argparse.ArgumentParser(description="Live Hands-Free JARVIS (No Wake Word)")
+    parser.add_argument("--push-to-talk", action="store_true", help="Use Enter-key push-to-talk instead of automatic VAD listening")
     args = parser.parse_args()
 
     print("=" * 70)
-    print("   AI-POWERED AUTONOMOUS DESKTOP AGENT: CONVERSATIONAL JARVIS")
+    print("   AI-POWERED AUTONOMOUS DESKTOP AGENT: HANDS-FREE JARVIS")
     print("=" * 70)
     print("[*] Initializing modules (RAM-only audio, zero disk recording)...\n")
 
@@ -296,42 +231,44 @@ def main():
     if not args.push_to_talk:
         print("\n[*] Calibrating microphone noise floor (stay quiet for 1s)...")
         threshold = calibrate_noise_floor()
-        print(f"    [OK] Speech threshold: {threshold:.4f} (barge-in: {max(threshold * 3.0, 0.075):.4f})")
+        print(f"    [OK] Speech threshold: {threshold:.4f}")
 
-    barge_threshold = max(threshold * 3.0, 0.075)
     print("-" * 70)
     if args.push_to_talk:
         print("Mode: Push-to-Talk (Press Enter to speak, 'q' to quit)")
     else:
-        print("Mode: Continuous Hands-Free | Wake Word: 'Hey Jarvis'")
-        print("Tip : Press [Space] or speak loudly to interrupt Jarvis mid-sentence.")
+        print("Mode: Automatic Hands-Free (No Wake Word)")
+        print("      [MIC ON] Listen -> [MIC OFF] Think, Execute & Speak -> [MIC ON]")
         print("      Press Ctrl+C to exit.")
     print("-" * 70)
 
-    speak_reply("Hello, I am Jarvis. Say Hey Jarvis whenever you need me.", tts_engine, barge_threshold)
+    # Speak greeting with MIC strictly OFF before opening mic for turn 1
+    speak_reply("Hello, I am Jarvis. I am ready for your commands.", tts_engine)
+    time.sleep(0.25)
 
-    active_until = 0.0
     turn = 1
-
     while True:
         try:
-            # Deliver any proactive background notifications
+            # Speak any background notifications while MIC is still OFF
             for note in bg_manager.pop_notifications():
                 print(f"\n[NOTIFICATION] {note}")
-                speak_reply(note, tts_engine, barge_threshold)
+                speak_reply(note, tts_engine)
+                time.sleep(0.2)
 
+            # --- PHASE A: MIC ON (wait for voice command) ---
             if args.push_to_talk:
                 print(f"\n[TURN #{turn}] Press [ENTER] to speak (or 'q' to quit): ", end="", flush=True)
                 choice = sys.stdin.readline().strip()
                 if choice.lower() in ("q", "quit", "exit"):
-                    speak_reply("Goodbye! Have a great day.", tts_engine, barge_threshold)
+                    speak_reply("Goodbye! Have a great day.", tts_engine)
                     break
                 audio_data = record_audio_interactive()
             else:
-                in_active = time.monotonic() < active_until
-                status_tag = "ACTIVE (listening...)" if in_active else "STANDBY (say 'Hey Jarvis')"
-                print(f"\n[{status_tag}] ", end="", flush=True)
+                print(f"\n[TURN #{turn} | MIC ON] Listening for your command...", flush=True)
                 audio_data = listen_utterance(threshold)
+
+            # --- PHASE B: MIC OFF (process, execute, and speak) ---
+            print("[MIC OFF] Processing...", flush=True)
 
             if audio_data is None or len(audio_data) < 2400:
                 continue
@@ -343,35 +280,18 @@ def main():
             if not recognized_text:
                 continue
 
-            # Wake word gating in continuous mode
-            if not args.push_to_talk:
-                in_active = time.monotonic() < active_until
-                woke, remainder = extract_wake_command(recognized_text)
-                if not in_active and not woke:
-                    continue
-                if woke and not remainder:
-                    print(f"\n>>> WAKE WORD: \"{recognized_text}\"")
-                    active_until = time.monotonic() + ACTIVE_WINDOW_SECS
-                    speak_reply("Yes, I am listening.", tts_engine, barge_threshold)
-                    continue
-                if woke and remainder:
-                    recognized_text = remainder
-
-            print(f"\n>>> YOU    : \"{recognized_text}\" (STT: {latency_stt:.2f}s)")
+            print(f">>> YOU    : \"{recognized_text}\" (STT: {latency_stt:.2f}s)")
 
             lower_cmd = recognized_text.lower().strip(".,!? ")
-            if lower_cmd in ("exit", "quit", "shut down jarvis", "bye jarvis"):
-                speak_reply("Goodbye! Have a great day.", tts_engine, barge_threshold)
+            if lower_cmd in ("exit", "quit", "shut down jarvis", "bye jarvis", "goodbye"):
+                speak_reply("Goodbye! Have a great day.", tts_engine)
                 break
-            if lower_cmd in ("go to sleep", "stop listening", "standby"):
-                active_until = 0.0
-                speak_reply("Going to standby. Say Hey Jarvis when you need me.", tts_engine, barge_threshold)
-                continue
 
             if lower_cmd in ("task status", "background tasks", "what tasks are running"):
                 summary = bg_manager.status_summary()
                 print(f">>> JARVIS : \"{summary}\"")
-                speak_reply(summary, tts_engine, barge_threshold)
+                speak_reply(summary, tts_engine)
+                time.sleep(0.25)
                 continue
 
             if lower_cmd.startswith(("run in background ", "in background ")):
@@ -379,14 +299,15 @@ def main():
                 tid = bg_manager.submit(bg_obj[:32], lambda o=bg_obj: goal_runner.run_objective(o, session_id="bg")[0])
                 msg = f"Started {tid} in the background. I will notify you when it finishes."
                 print(f">>> JARVIS : \"{msg}\"")
-                speak_reply(msg, tts_engine, barge_threshold)
+                speak_reply(msg, tts_engine)
+                time.sleep(0.25)
                 continue
 
             def _confirm_cli(prompt_txt: str) -> bool:
-                speak_reply(f"{prompt_txt} Please type yes in the terminal to confirm.", tts_engine, barge_threshold)
+                speak_reply(f"{prompt_txt} Please type yes in the terminal to confirm.", tts_engine)
                 return input("[!] Confirm risky action? (yes/no): ").strip().lower() in ("y", "yes")
 
-            # Autonomous Multi-Step Brain + Tools + Screen Vision + Action Execution
+            # Brain Reasoning + Tool/Action Execution (MIC is OFF)
             t_brain = time.time()
             spoken_reply, action_logs = goal_runner.run_objective(
                 recognized_text, session_id="live_jarvis", confirm_fn=_confirm_cli
@@ -397,11 +318,11 @@ def main():
             for log in action_logs:
                 print(f"[ACTION] {log}")
 
-            interrupted = speak_reply(spoken_reply, tts_engine, barge_threshold)
-            if interrupted:
-                print("[*] Interrupted — listening...")
+            # Speak full reply with MIC strictly OFF
+            speak_reply(spoken_reply, tts_engine)
 
-            active_until = time.monotonic() + ACTIVE_WINDOW_SECS
+            # Brief echo guard before turning MIC ON again
+            time.sleep(0.25)
             turn += 1
 
         except KeyboardInterrupt:
