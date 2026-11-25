@@ -37,3 +37,7 @@ tts_module/audio/output/*.wav
 .idea/
 .DS_Store
 Thumbs.db
+
+# Environment & API Secrets
+.env
+.env.local

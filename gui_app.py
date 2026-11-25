@@ -400,10 +400,12 @@ class JarvisDesktopGUI:
             stt_txt = "STT: Error"
         self._safe_after(lambda: self.pill_stt.config(text=stt_txt, bg=PILL_OK_BG, fg=PILL_OK_FG))
 
-        # 3. Load Brain & warm up Ollama in background
+        # 3. Load Brain (prefers Gemini 3.1 Flash Lite if configured, else Ollama)
         try:
             self.brain = Brain(mode="auto")
-            if self.brain.ollama_available:
+            if getattr(self.brain, "gemini_available", False):
+                brain_txt = "Brain: Gemini 3.1"
+            elif self.brain.ollama_available:
                 self.brain.model.warmup()
                 brain_txt = "Brain: Hybrid (LLM)"
             else:

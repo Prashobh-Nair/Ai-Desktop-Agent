@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from typing import Dict, Optional
 
-from .llm import BadModelOutput, JarvisModel, ModelUnavailable
+from .llm import BadModelOutput, GeminiModel, JarvisModel, ModelUnavailable
 from .planner import RulesPlanner
 from .schema import Action, Intent, Plan, enforce_safety
 
@@ -115,21 +115,35 @@ class Brain:
     def __init__(self, mode: Optional[str] = None):
         self.mode = (mode or os.getenv("BRAIN_MODE", "auto")).lower()
         self.rules = RulesPlanner()
+        self.gemini = GeminiModel()
         self.model = JarvisModel()
         self.sessions: Dict[str, Dict] = {}   # remembers the last app per user/session
 
-        # Ensure local neural daemon is running
-        ensure_ollama_running()
-        self.ollama_available = self.model.is_reachable()
+        self.gemini_available = self.gemini.is_configured
+        # Only start heavy local Ollama if Gemini is not configured (saves ~1.6GB RAM!)
+        if self.gemini_available:
+            self.ollama_available = False
+        else:
+            ensure_ollama_running()
+            self.ollama_available = self.model.is_reachable()
+
         if self.mode == "auto":
-            self.mode = "hybrid" if self.ollama_available else "rules"
+            self.mode = "hybrid" if (self.gemini_available or self.ollama_available) else "rules"
+
+    def _active_llm(self):
+        """Returns (backend_name, llm_client) preferring Gemini, with Ollama fallback."""
+        if self.gemini_available:
+            return "gemini", self.gemini
+        if self.ollama_available:
+            return "model", self.model
+        return None, None
 
     def plan(self, text: str, session_id: str = "default") -> Dict:
         start = time.perf_counter()
         ctx = self.sessions.setdefault(session_id, {})
         used, note = "rules", None
 
-        if self.mode == "rules" or not self.ollama_available:
+        if self.mode == "rules" or (not self.gemini_available and not self.ollama_available):
             plan = self.rules.plan(text, ctx)
             used = "rules"
             note = None
@@ -140,20 +154,38 @@ class Brain:
                 if fast.intent != Intent.UNKNOWN and fast.confidence >= 0.9:
                     plan = fast
             if plan is None:
-                try:
-                    # Direct conversational Q&A when user asks to tell/explain (without asking to search)
-                    if _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
-                        answer = self.model.chat_answer(text)
-                        plan, used = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0), "model"
-                    else:
-                        plan, used = self.model.plan(text), "model"
-                        # Never open browser search unless user explicitly asked to search
-                        has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
-                        if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
-                            answer = self.model.chat_answer(text)
-                            plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
-                except (ModelUnavailable, BadModelOutput) as e:
-                    plan, note = self.rules.plan(text, ctx), f"model failed, used rules: {e}"
+                backend_name, llm = self._active_llm()
+                if llm is not None:
+                    try:
+                        if _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
+                            answer = llm.chat_answer(text)
+                            plan, used = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0), backend_name
+                        else:
+                            plan, used = llm.plan(text), backend_name
+                            has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
+                            if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
+                                answer = llm.chat_answer(text)
+                                plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
+                    except (ModelUnavailable, BadModelOutput) as e:
+                        # Automatic offline fallback to Ollama if Gemini fails (e.g., no internet)
+                        if backend_name == "gemini":
+                            ensure_ollama_running()
+                            if self.model.is_reachable():
+                                self.ollama_available = True
+                                try:
+                                    if _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
+                                        ans = self.model.chat_answer(text)
+                                        plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
+                                    else:
+                                        plan, used = self.model.plan(text), "model"
+                                except (ModelUnavailable, BadModelOutput) as e2:
+                                    plan, note = self.rules.plan(text, ctx), f"models failed, used rules: {e2}"
+                            else:
+                                plan, note = self.rules.plan(text, ctx), f"gemini failed ({e}), used rules"
+                        else:
+                            plan, note = self.rules.plan(text, ctx), f"model failed, used rules: {e}"
+                else:
+                    plan = self.rules.plan(text, ctx)
 
         plan = enforce_safety(plan)           # shutdown etc. always need confirmation
 
