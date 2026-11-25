@@ -58,6 +58,14 @@ WHISPER_SPECS = {
         "hidden_dim": 768,
         "heads": 12
     },
+    "small.en": {
+        "parameters": "244 Million (English-Specialized)",
+        "param_count": 244_000_000,
+        "ram_mb": 580,
+        "layers": 12,
+        "hidden_dim": 768,
+        "heads": 12
+    },
     "medium": {
         "parameters": "769 Million",
         "param_count": 769_000_000,
@@ -102,10 +110,10 @@ class LocalWhisperEngine:
         self.compute_type = compute_type
         self.cpu_threads = cpu_threads
 
-        # Determine model path
+        # Determine model path (use local acoustic-model folder only for default 'base')
         if model_path and os.path.exists(model_path):
             self.model_source = str(Path(model_path).resolve())
-        elif DEFAULT_LOCAL_MODEL_PATH.exists() and (DEFAULT_LOCAL_MODEL_PATH / "model.bin").exists():
+        elif self.model_size == "base" and DEFAULT_LOCAL_MODEL_PATH.exists() and (DEFAULT_LOCAL_MODEL_PATH / "model.bin").exists():
             self.model_source = str(DEFAULT_LOCAL_MODEL_PATH.resolve())
         else:
             self.model_source = self.model_size
