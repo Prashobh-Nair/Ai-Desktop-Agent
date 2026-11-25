@@ -175,7 +175,9 @@ def main() -> None:
     vision = LocalScreenVision()
     vision.start_live_watch(interval=2.5)
     executor = ActionExecutor()
-    plugin_manager = PluginManager()
+    plugin_manager = PluginManager(
+        llm=getattr(brain, "groq", None) or getattr(brain, "gemini", None)
+    )
     bg_manager = BackgroundTaskManager()
     goal_runner = AutonomousGoalRunner(brain, executor, vision=vision)
     stt = SpeechRecognizer(model_size="small.en")

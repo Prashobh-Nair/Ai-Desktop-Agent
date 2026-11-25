@@ -11,9 +11,11 @@ On-Demand Persistent Plugin Manager for JARVIS.
 
 from __future__ import annotations
 
+import base64
 import ctypes
 import ctypes.wintypes
 import getpass
+import html as _html_mod
 import importlib.util
 import json
 import os
@@ -26,6 +28,7 @@ import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -346,7 +349,101 @@ INTEGRATION_BLUEPRINTS: Dict[str, Dict[str, Any]] = {
 
 
 # ---------------------------------------------------------------------------
-# 4. Dynamic Runners (REST API, MCP Stdio, Custom Python)
+# 4. Gmail MIME Parsing Helpers
+# ---------------------------------------------------------------------------
+
+def _strip_html(html_str: str) -> str:
+    """Strip HTML tags and decode entities to plain text."""
+    class _Stripper(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.parts: List[str] = []
+        def handle_data(self, d: str):
+            self.parts.append(d)
+    s = _Stripper()
+    s.feed(html_str)
+    return _html_mod.unescape(" ".join(s.parts)).strip()
+
+
+def _decode_base64url(data: str) -> str:
+    """Decode Gmail's base64url-encoded body safely."""
+    try:
+        padded = data.replace("-", "+").replace("_", "/")
+        padded += "=" * ((4 - len(padded) % 4) % 4)
+        return base64.b64decode(padded).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _extract_body_from_payload(payload: dict, _depth: int = 0) -> str:
+    """Recursively extract plain text or HTML body from Gmail message payload."""
+    if _depth > 6:
+        return ""
+    mime = payload.get("mimeType", "")
+    body_data = (payload.get("body") or {}).get("data") or ""
+
+    if mime == "text/plain" and body_data:
+        return _decode_base64url(body_data)
+    if mime == "text/html" and body_data:
+        return _strip_html(_decode_base64url(body_data))
+
+    parts = payload.get("parts") or []
+    # Prefer text/plain first
+    for part in parts:
+        if part.get("mimeType") == "text/plain":
+            d = (part.get("body") or {}).get("data") or ""
+            text = _decode_base64url(d)
+            if text.strip():
+                return text[:1000]
+    # Then text/html
+    for part in parts:
+        if part.get("mimeType") == "text/html":
+            d = (part.get("body") or {}).get("data") or ""
+            text = _strip_html(_decode_base64url(d))
+            if text.strip():
+                return text[:1000]
+    # Recurse into nested multipart
+    for part in parts:
+        result = _extract_body_from_payload(part, _depth + 1)
+        if result.strip():
+            return result[:1000]
+    return ""
+
+
+def _parse_gmail_message(msg: dict) -> Optional[dict]:
+    """Extract From, Subject, Date, and body from a full Gmail API message object."""
+    if not msg or "payload" not in msg:
+        return None
+    hdr_list = (msg["payload"].get("headers") or [])
+    headers: Dict[str, str] = {h["name"]: h["value"] for h in hdr_list if "name" in h}
+    body = _extract_body_from_payload(msg["payload"])
+    snippet = msg.get("snippet", "")
+    return {
+        "from": headers.get("From", "Unknown Sender"),
+        "subject": headers.get("Subject", "(No Subject)"),
+        "date": headers.get("Date", ""),
+        "body": (body.strip() or snippet)[:600],
+    }
+
+
+def _format_emails_for_llm(emails: List[dict]) -> str:
+    """Format parsed email list into a compact text block for LLM summarization."""
+    if not emails:
+        return "No emails found."
+    parts = []
+    for i, e in enumerate(emails, 1):
+        parts.append(
+            f"Email {i}:\n"
+            f"  From: {e['from']}\n"
+            f"  Subject: {e['subject']}\n"
+            f"  Date: {e['date']}\n"
+            f"  Content: {e['body'][:400]}"
+        )
+    return "\n---\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# 5. Dynamic Runners (REST API, MCP Stdio, Custom Python)
 # ---------------------------------------------------------------------------
 
 def _http_json(
@@ -441,10 +538,18 @@ class MCPStdioClient:
 class PluginManager:
     """Orchestrates on-demand plugin creation, encrypted secrets, and execution."""
 
-    def __init__(self, db_path: Path = DB_PATH, secrets_dir: Path = SECRETS_DIR, plugins_dir: Path = CUSTOM_PLUGINS_DIR):
+    def __init__(
+        self,
+        db_path: Path = DB_PATH,
+        secrets_dir: Path = SECRETS_DIR,
+        plugins_dir: Path = CUSTOM_PLUGINS_DIR,
+        llm: Any = None,
+    ):
         self.registry = PluginRegistry(db_path=db_path)
         self.secrets = SecretStore(secrets_dir=secrets_dir)
         self.plugins_dir = plugins_dir
+        self.llm = llm  # Optional GroqBrainModel / GeminiModel for summarization
+        self._last_emails: Dict[str, List[dict]] = {}  # plugin_id -> last fetched emails
         self.discover_custom_plugins()
 
     def discover_custom_plugins(self) -> int:
@@ -761,7 +866,72 @@ class PluginManager:
                 elif "repo" in q_low:
                     endpoint = "/user/repos?sort=updated&per_page=5"
             elif pid == "gmail":
-                endpoint = "/users/me/messages?maxResults=5"
+                # --- Full Gmail fetch + MIME parse + LLM summarization ---
+                q_low_g = q_low  # already computed above
+
+                # Check if this is a follow-up question about previously fetched emails
+                if "email" in q_low_g and self._last_emails.get("gmail"):
+                    # Re-use cached emails for follow-up queries
+                    cached = self._last_emails["gmail"]
+                    email_text = _format_emails_for_llm(cached)
+                    followup_prompt = (
+                        f"The user asked: \"{task_query}\"\n\n"
+                        f"Here are the emails we already fetched:\n{email_text}\n\n"
+                        "Answer the user's follow-up question about these emails in a concise, friendly, conversational way."
+                    )
+                    if self.llm and hasattr(self.llm, "chat_answer"):
+                        return self.llm.chat_answer(followup_prompt)
+                    return email_text
+
+                # Step 1: Get list of message IDs
+                list_status, list_data = _http_json(
+                    f"{base}/users/me/messages?maxResults=10", "GET", headers=headers
+                )
+                if list_status in (401, 403):
+                    self.registry.update_status(pid, "expired", "error")
+                    return "Your Gmail authentication has expired. Say 'reconnect Gmail' to renew it."
+                if list_status < 200 or list_status >= 300:
+                    return f"Gmail returned an error (HTTP {list_status}). Try reconnecting."
+
+                messages_meta = (list_data or {}).get("messages") or []
+                if not messages_meta:
+                    return "Your Gmail inbox appears to be empty."
+
+                # Step 2: Fetch up to 5 full messages
+                emails: List[dict] = []
+                for msg_meta in messages_meta[:5]:
+                    msg_id = msg_meta.get("id")
+                    if not msg_id:
+                        continue
+                    _, msg_data = _http_json(
+                        f"{base}/users/me/messages/{msg_id}?format=full", "GET", headers=headers
+                    )
+                    parsed = _parse_gmail_message(msg_data)
+                    if parsed:
+                        emails.append(parsed)
+
+                if not emails:
+                    return "I could fetch your email list but couldn't read the message content. Your token may need the gmail.readonly scope."
+
+                # Cache for follow-up questions
+                self._last_emails["gmail"] = emails
+
+                # Step 3: Format and pass to LLM for summarization
+                email_text = _format_emails_for_llm(emails)
+                summarize_prompt = (
+                    f"You are JARVIS, a friendly voice assistant. The user asked: \"{task_query}\"\n\n"
+                    f"Here are their latest {len(emails)} Gmail emails:\n\n{email_text}\n\n"
+                    "Please summarize these emails in a natural, conversational way. "
+                    "Highlight important messages, deadlines, requests, and action items. "
+                    "Keep it concise and voice-friendly — no markdown, no bullet symbols, just plain spoken sentences."
+                )
+                self.registry.update_status(pid, "connected", "healthy")
+                if self.llm and hasattr(self.llm, "chat_answer"):
+                    return self.llm.chat_answer(summarize_prompt)
+                # Fallback: return raw formatted text if no LLM available
+                return f"Here are your latest {len(emails)} emails:\n" + "\n".join(
+                    f"{i+1}. From {e['from']} — {e['subject']}" for i, e in enumerate(emails)
+                )
             elif pid == "spotify":
                 if "recent" in q_low:
                     endpoint = "/me/player/recently-played?limit=5"
