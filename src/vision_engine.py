@@ -9,10 +9,35 @@ Optimized for 8GB RAM laptops (no Ollama GPU/OOM crashes):
 
 from __future__ import annotations
 
+import base64
+import io
+import json
 import os
+import urllib.error
+import urllib.request
+from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageGrab
+
+
+def _load_gemini_key() -> str:
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if key:
+        return key
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == "GEMINI_API_KEY":
+                    return v.strip().strip('"').strip("'")
+        except OSError:
+            pass
+    return ""
 
 
 class LocalScreenVision:
@@ -58,15 +83,53 @@ class LocalScreenVision:
             img = img.resize((max_width, max(1, int(img.height * ratio))), Image.Resampling.LANCZOS)
         return img
 
+    def _analyze_with_gemini(self, img: Image.Image, prompt_text: str) -> Optional[str]:
+        api_key = _load_gemini_key()
+        if not api_key or api_key == "your_gemini_api_key_here":
+            return None
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        body = json.dumps({
+            "contents": [{
+                "role": "user",
+                "parts": [
+                    {"text": f"{prompt_text} Answer concisely in 1 to 3 sentences."},
+                    {"inlineData": {"mimeType": "image/png", "data": b64}},
+                ],
+            }],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 250},
+        }).encode("utf-8")
+
+        for model_id in ("gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3-flash-preview"):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=12.0) as resp:
+                    data = json.loads(resp.read())
+                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except urllib.error.HTTPError as e:
+                if e.code in (404, 429, 500, 503, 504):
+                    continue
+                return None
+            except Exception:
+                return None
+        return None
+
     def analyze_image(self, img: Image.Image, question: Optional[str] = None) -> str:
-        """Analyzes a PIL Image locally using SmolVLM-256M-Instruct."""
+        """Analyzes a PIL Image via Gemini Vision (when online) with SmolVLM-256M local fallback."""
+        prompt_text = (question or "").strip() or "Describe what is on this screen briefly in 1 to 2 sentences."
+        cloud_answer = self._analyze_with_gemini(img, prompt_text)
+        if cloud_answer:
+            return cloud_answer
+
         import torch
 
         self.initialize()
         processor = LocalScreenVision._processor
         model = LocalScreenVision._model
 
-        prompt_text = (question or "").strip() or "Describe what is on this screen briefly in 1 to 2 sentences."
         msgs = [{
             "role": "user",
             "content": [{"type": "image"}, {"type": "text", "text": prompt_text}],

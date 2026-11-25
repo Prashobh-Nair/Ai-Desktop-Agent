@@ -1,10 +1,8 @@
 """The Brain. Text in -> validated Plan out (with a spoken reply).
 
-mode "model"  : YOUR trained model decides; rules are only a safety net
-                (used when the model is offline or returns an invalid plan)
-mode "rules"  : rule-based planner only (the baseline for the report)
-mode "hybrid" : rules for very clear commands, the model for everything else
-mode "auto"   : same as "model" (default)
+Pure AI-model routing (no RulesPlanner):
+- Primary (API): Google Gemini (fast, high-intelligence, zero local RAM)
+- Fallback (Local): Fine-tuned Ollama model (`jarvis:latest`) when offline
 """
 import os
 import re
@@ -19,7 +17,6 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from .llm import BadModelOutput, GeminiModel, JarvisModel, ModelUnavailable
-from .planner import RulesPlanner
 from .schema import Action, Intent, Plan, enforce_safety
 from src.memory_manager import MemoryManager
 
@@ -121,7 +118,6 @@ def ensure_ollama_running() -> bool:
 class Brain:
     def __init__(self, mode: Optional[str] = None):
         self.mode = (mode or os.getenv("BRAIN_MODE", "auto")).lower()
-        self.rules = RulesPlanner()
         self.gemini = GeminiModel()
         self.model = JarvisModel()
         self.memory = MemoryManager()
@@ -129,87 +125,86 @@ class Brain:
 
         self.gemini_available = self.gemini.is_configured
         # Only start heavy local Ollama if Gemini is not configured (saves ~1.6GB RAM!)
-        if self.gemini_available:
+        if self.gemini_available and self.mode != "model":
             self.ollama_available = False
         else:
             ensure_ollama_running()
             self.ollama_available = self.model.is_reachable()
 
         if self.mode == "auto":
-            self.mode = "hybrid" if (self.gemini_available or self.ollama_available) else "rules"
+            self.mode = "gemini" if self.gemini_available else "model"
 
     def _active_llm(self):
         """Returns (backend_name, llm_client) preferring Gemini, with Ollama fallback."""
-        if self.gemini_available:
+        if self.mode != "model" and self.gemini_available:
             return "gemini", self.gemini
         if self.ollama_available:
             return "model", self.model
         return None, None
+
+    @staticmethod
+    def _unavailable_plan(reason: str) -> Plan:
+        msg = "I couldn't reach Gemini or local Ollama right now. Please check your internet or start Ollama."
+        return Plan(intent=Intent.CLARIFY, steps=[], clarification_question=msg, reply=msg, confidence=0.0)
 
     def plan(self, text: str, session_id: str = "default") -> Dict:
         start = time.perf_counter()
         ctx = self.sessions.setdefault(session_id, {})
         history = self.memory.get_history(session_id)
         mem_context = self.memory.retrieve_relevant(text)
-        used, note = "rules", None
+        used, note = "unavailable", None
 
-        if self.mode == "rules" or (not self.gemini_available and not self.ollama_available):
-            plan = self.rules.plan(text, ctx)
-            used = "rules"
-            note = None
-        else:
-            plan = None
-            if self.mode == "hybrid":
-                fast = self.rules.plan(text, ctx)
-                if fast.intent != Intent.UNKNOWN and fast.confidence >= 0.9:
-                    plan = fast
-            if plan is None:
-                backend_name, llm = self._active_llm()
-                if llm is not None:
-                    try:
-                        if backend_name == "gemini":
-                            plan, used = llm.plan(text, history=history, memory_context=mem_context), "gemini"
-                        elif _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
-                            answer = llm.chat_answer(text)
-                            plan, used = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0), backend_name
-                        else:
-                            plan, used = llm.plan(text), backend_name
+        backend_name, llm = self._active_llm()
+        if llm is None:
+            ensure_ollama_running()
+            if self.model.is_reachable():
+                self.ollama_available = True
+                backend_name, llm = "model", self.model
 
-                        has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
-                        if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
-                            answer = llm.chat_answer(text, history=history, memory_context=mem_context) if backend_name == "gemini" else llm.chat_answer(text)
-                            plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
-                    except (ModelUnavailable, BadModelOutput) as e:
-                        # Automatic offline fallback to Ollama if Gemini fails (e.g., no internet)
-                        if backend_name == "gemini":
-                            ensure_ollama_running()
-                            if self.model.is_reachable():
-                                self.ollama_available = True
-                                try:
-                                    if _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
-                                        ans = self.model.chat_answer(text)
-                                        plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
-                                    else:
-                                        try:
-                                            plan, used = self.model.plan(text), "model"
-                                        except BadModelOutput:
-                                            ans = self.model.chat_answer(text)
-                                            plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
-                                except (ModelUnavailable, BadModelOutput) as e2:
-                                    plan, note = self.rules.plan(text, ctx), f"models failed, used rules: {e2}"
-                            else:
-                                plan, note = self.rules.plan(text, ctx), f"gemini failed ({e}), used rules"
-                        else:
-                            if isinstance(e, BadModelOutput):
-                                try:
-                                    ans = llm.chat_answer(text)
-                                    plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), backend_name
-                                except (ModelUnavailable, BadModelOutput) as e2:
-                                    plan, note = self.rules.plan(text, ctx), f"model failed, used rules: {e2}"
-                            else:
-                                plan, note = self.rules.plan(text, ctx), f"model failed, used rules: {e}"
+        if llm is not None:
+            try:
+                if backend_name == "gemini":
+                    plan, used = llm.plan(text, history=history, memory_context=mem_context), "gemini"
+                elif _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
+                    answer = llm.chat_answer(text)
+                    plan, used = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0), backend_name
                 else:
-                    plan = self.rules.plan(text, ctx)
+                    plan, used = llm.plan(text), backend_name
+
+                has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
+                if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
+                    answer = llm.chat_answer(text, history=history, memory_context=mem_context) if backend_name == "gemini" else llm.chat_answer(text)
+                    plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
+            except (ModelUnavailable, BadModelOutput) as e:
+                # Automatic offline fallback to local Ollama if Gemini fails
+                if backend_name == "gemini":
+                    ensure_ollama_running()
+                    if self.model.is_reachable():
+                        self.ollama_available = True
+                        try:
+                            if _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
+                                ans = self.model.chat_answer(text)
+                                plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
+                            else:
+                                try:
+                                    plan, used = self.model.plan(text), "model"
+                                except BadModelOutput:
+                                    ans = self.model.chat_answer(text)
+                                    plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
+                        except (ModelUnavailable, BadModelOutput) as e2:
+                            plan, note = self._unavailable_plan(str(e2)), f"gemini & ollama failed: {e2}"
+                    else:
+                        plan, note = self._unavailable_plan(str(e)), f"gemini failed ({e}) and ollama unreachable"
+                elif isinstance(e, BadModelOutput):
+                    try:
+                        ans = llm.chat_answer(text)
+                        plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), backend_name
+                    except (ModelUnavailable, BadModelOutput) as e2:
+                        plan, note = self._unavailable_plan(str(e2)), f"model failed: {e2}"
+                else:
+                    plan, note = self._unavailable_plan(str(e)), f"model failed: {e}"
+        else:
+            plan, note = self._unavailable_plan("no LLM available"), "no LLM backend available"
 
         plan = enforce_safety(plan)           # shutdown etc. always need confirmation
 

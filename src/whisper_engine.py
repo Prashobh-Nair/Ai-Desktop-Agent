@@ -3,10 +3,15 @@ Local Offline Neural Speech-to-Text Engine
 High-Capacity Transformer Architecture (Whisper-Base 74M / Small 244M)
 Optimized with INT8 Quantization via CTranslate2 for Local CPU/GPU Inference.
 """
+import io
+import json
 import os
 import sys
 import time
 import math
+import urllib.error
+import urllib.request
+import uuid
 import warnings
 from pathlib import Path
 from typing import Dict, Any, Union, Optional
@@ -297,9 +302,109 @@ class LocalWhisperEngine:
             "ram_footprint": f"~{self.specs['ram_mb']} MB",
             "offline": True,
             "source_path": self.model_source,
-            "comparison_with_baseline": {
-                "custom_scratch_model_params": "1.6 Million (CNN + BiLSTM + CTC)",
-                "whisper_local_model_params": self.specs["parameters"],
-                "scale_factor": f"{self.specs['param_count'] / 1_600_000:.1f}x larger capacity"
+        }
+
+
+def _load_env_key(name: str) -> str:
+    val = os.getenv(name, "").strip()
+    if val:
+        return val
+    env_path = PROJECT_ROOT.parent / ".env"
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == name:
+                    return v.strip().strip('"').strip("'")
+        except OSError:
+            pass
+    return ""
+
+
+class GroqWhisperClient:
+    """Fast cloud STT via Groq Whisper large-v3-turbo (in-memory WAV, zero disk writes)."""
+
+    ENDPOINT = "https://api.groq.com/openai/v1/audio/transcriptions"
+
+    def __init__(self, api_key: Optional[str] = None, model: str = "whisper-large-v3-turbo", timeout: float = 10.0):
+        self.api_key = (api_key or _load_env_key("GROQ_API_KEY")).strip()
+        self.model = model
+        self.timeout = timeout
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.api_key and self.api_key != "your_groq_api_key_here")
+
+    def transcribe_with_metadata(
+        self,
+        audio_input: Union[str, Path, np.ndarray],
+        language: Optional[str] = "en",
+        initial_prompt: Optional[str] = DEFAULT_PROMPT_BIAS,
+        hotwords: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self.is_configured:
+            raise RuntimeError("GROQ_API_KEY is not configured.")
+
+        audio_data = LocalWhisperEngine.load_audio(audio_input)
+        duration = len(audio_data) / 16000.0
+        if len(audio_data) == 0:
+            return {
+                "text": "",
+                "language": (language or "en").upper(),
+                "confidence": 0.0,
+                "duration": 0.0,
+                "latency": 0.0,
+                "rtf": 0.0,
+                "model_name": f"Groq {self.model} (Cloud)",
+                "offline": False,
             }
+
+        buf = io.BytesIO()
+        sf.write(buf, audio_data, 16000, format="WAV", subtype="PCM_16")
+        wav_bytes = buf.getvalue()
+
+        prompt_parts = [p for p in (initial_prompt, f"Key terms: {hotwords}" if hotwords else None) if p]
+        prompt_str = " ".join(prompt_parts)[:800]
+
+        boundary = f"----JarvisBoundary{uuid.uuid4().hex}"
+        parts: list[bytes] = []
+        for field, value in (("model", self.model), ("language", language or "en"), ("prompt", prompt_str)):
+            if not value:
+                continue
+            parts.append(
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n".encode("utf-8")
+            )
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n"
+            f"Content-Type: audio/wav\r\n\r\n".encode("utf-8")
+            + wav_bytes
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        body = b"".join(parts)
+
+        req = urllib.request.Request(
+            self.ENDPOINT,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": "Jarvis-Desktop-Agent/1.0",
+            },
+        )
+        t0 = time.time()
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        latency = time.time() - t0
+        return {
+            "text": (payload.get("text") or "").strip(),
+            "language": (language or "en").upper(),
+            "confidence": 99.0,
+            "duration": round(duration, 2),
+            "latency": round(latency, 3),
+            "rtf": round(latency / max(0.01, duration), 3),
+            "model_name": f"Groq {self.model} (Cloud)",
+            "offline": False,
         }

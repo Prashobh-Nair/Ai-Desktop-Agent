@@ -8,11 +8,11 @@ import argparse
 import soundfile as sf
 import numpy as np
 from scipy.signal import resample_poly
-from src.whisper_engine import LocalWhisperEngine
+from src.whisper_engine import GroqWhisperClient, LocalWhisperEngine
 
 
 class SpeechRecognizer:
-    """Standalone Local Speech Recognizer backed by Local Neural Whisper (INT8)."""
+    """Hybrid Speech Recognizer: Groq Whisper large-v3-turbo (API) -> Local Whisper (offline fallback)."""
 
     def __init__(
         self,
@@ -24,6 +24,7 @@ class SpeechRecognizer:
         self.engine = "whisper"
         self.engine_type = "whisper"
         self.device = device or "cpu"
+        self.groq_engine = GroqWhisperClient()
         self.whisper_engine = LocalWhisperEngine(
             model_size=model_size,
             device="cuda" if str(self.device) == "cuda" else "cpu",
@@ -32,7 +33,7 @@ class SpeechRecognizer:
         self.model = None
         self.parameter_count = self.whisper_engine.specs["param_count"]
         self.parameter_str = self.whisper_engine.specs["parameters"]
-        self.checkpoint_epoch = "local-pretrained"
+        self.checkpoint_epoch = "hybrid-api-local" if self.groq_engine.is_configured else "local-pretrained"
         self.best_val_loss = None
 
     def load_audio(self, audio_input):
@@ -41,7 +42,7 @@ class SpeechRecognizer:
 
     def transcribe(self, audio_path: str) -> str:
         """Transcribes a WAV file or audio array to English text."""
-        return self.whisper_engine.transcribe(audio_path)
+        return self.transcribe_with_metadata(audio_path)["text"]
 
     def transcribe_with_metadata(
         self,
@@ -49,7 +50,16 @@ class SpeechRecognizer:
         initial_prompt: str = None,
         hotwords: str = None,
     ) -> dict:
-        """Transcribes with complete metadata (latency, RTF, parameters, language)."""
+        """Transcribes via Groq API when configured, falling back seamlessly to Local Whisper."""
+        if self.groq_engine.is_configured:
+            try:
+                return self.groq_engine.transcribe_with_metadata(
+                    audio_path,
+                    initial_prompt=initial_prompt,
+                    hotwords=hotwords,
+                )
+            except Exception:
+                pass
         kwargs = {}
         if initial_prompt is not None:
             kwargs["initial_prompt"] = initial_prompt
