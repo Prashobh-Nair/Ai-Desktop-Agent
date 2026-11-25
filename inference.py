@@ -5,12 +5,9 @@ Unified Speech-to-Text Inference Module
 """
 import os
 import argparse
-import torch
 import soundfile as sf
 import numpy as np
 from scipy.signal import resample_poly
-from src.text import Tokenizer, CTCGreedyDecoder
-from src.model import SpeechRecognitionModel
 from src.whisper_engine import LocalWhisperEngine
 
 
@@ -28,12 +25,12 @@ class SpeechRecognizer:
         device: str = None
     ):
         self.engine = engine.lower()
-        if device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = torch.device(device)
-
         if self.engine in ["custom", "bilstm", "cnn"]:
+            import torch
+            from src.text import Tokenizer, CTCGreedyDecoder
+            from src.model import SpeechRecognitionModel
+
+            self.device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
             self.engine_type = "custom"
             ckpt = checkpoint_path or "checkpoints/best_model.pt"
             if not os.path.exists(ckpt):
