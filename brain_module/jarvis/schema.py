@@ -44,6 +44,7 @@ class Action(str, Enum):
     SPEAK = "speak"            # value = text for TTS
     GET_TIME = "get_time"      # code looks up the current time
     GET_DATE = "get_date"      # code looks up today's date
+    SEE_SCREEN = "see_screen"  # local vision model inspects the current screen
 
 
 class Step(BaseModel):

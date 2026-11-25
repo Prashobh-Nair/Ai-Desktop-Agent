@@ -31,6 +31,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from inference import SpeechRecognizer
 from src.executor import ActionExecutor
+from src.vision_engine import LocalScreenVision
 from brain_module.jarvis.brain import Brain
 
 
@@ -122,11 +123,12 @@ def main():
         stt_recognizer.whisper_engine.initialize()
         print(f"      [OK] Whisper-Base (74M) ready ({time.time() - t0:.2f}s)")
 
-    # 3. Initialize Module 2 (Brain) & Module 4 (OS/Browser Executor)
-    print("[3/3] Loading Module 2: Jarvis Brain & OS/Browser Executor...")
+    # 3. Initialize Module 2 (Brain) & Module 4 (OS/Browser Executor + Screen Vision)
+    print("[3/3] Loading Module 2: Jarvis Brain, OS/Browser Executor & Screen Vision...")
     t0 = time.time()
     brain = Brain(mode="auto")
     executor = ActionExecutor()
+    vision = LocalScreenVision()
     if getattr(brain, "gemini_available", False):
         engine_desc = "Gemini 3.1 Flash Lite + Local Rules"
     elif brain.ollama_available:
@@ -184,6 +186,14 @@ def main():
         spoken_reply = plan.get("reply") or "I processed your request."
         backend = brain_out.get("backend", "model")
         latency_brain = time.time() - t_brain
+
+        # Handle local screen understanding (Moondream VLM)
+        steps = plan.get("steps") or []
+        if any(s.get("action") == "see_screen" for s in steps):
+            print("[*] Capturing screen and analyzing with local SmolVLM-256M Vision model...")
+            spoken_reply = vision.analyze_screen(recognized_text)
+            steps = [s for s in steps if s.get("action") != "see_screen"]
+            plan["steps"] = steps
 
         print(f">>> JARVIS   : \"{spoken_reply}\" (Engine: {backend} | Intent: {intent} | Latency: {latency_brain:.2f}s)")
 

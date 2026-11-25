@@ -103,6 +103,20 @@ class RulesPlanner:
                 confidence=1.0,
             )
 
+        # --- screen understanding (Intent.INFO -> Action.SEE_SCREEN) ---
+        if re.search(
+            r"\b(?:what(?:'s|\s+is)\s+on\s+(?:my|the)\s+screen|"
+            r"(?:look\s+at|read|describe|check|see|analyze|explain)\s+(?:my|the)\s+screen|"
+            r"what\s+am\s+i\s+looking\s+at|what\s+(?:app|window)\s+is\s+open)\b",
+            clean_raw,
+        ):
+            return Plan(
+                intent=Intent.INFO,
+                steps=[Step(action=Action.SEE_SCREEN, query=text.strip())],
+                reply="Let me take a look at your screen.",
+                confidence=1.0,
+            )
+
         # --- time & date (Intent.INFO) ---
         if re.search(r"\b(?:what(?:\s*is|'?s)?\s+(?:the\s+)?time|tell\s+(?:me\s+)?the\s+time|current\s+time|what\s+time\s+is\s+it|time\s+kya\s+hua|samay\s+kya\s+hua)\b", clean_raw) or clean_raw in ("time", "samay"):
             return Plan(
