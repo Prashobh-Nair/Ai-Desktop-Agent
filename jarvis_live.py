@@ -36,13 +36,21 @@ from brain_module.jarvis.brain import Brain
 
 
 def speak_reply(text: str, tts_engine=None) -> None:
-    """Speaks text using Kokoro-82M, falling back to Windows SAPI5 if RAM is tight."""
+    """Speaks text in memory (RAM-only, zero disk files) using Kokoro-82M or Windows SAPI5."""
     clean = " ".join((text or "").split())
     if not clean:
         return
-    if tts_engine is not None:
+    if tts_engine is not None and getattr(tts_engine, "_kokoro", None) is not None:
         try:
-            tts_engine.speak(clean, blocking=True)
+            processed = tts_engine.text_processor.preprocess_text(clean)
+            samples, sr = tts_engine._kokoro.create(
+                processed,
+                voice=tts_engine.config.voice,
+                speed=tts_engine.config.speed,
+                lang=tts_engine.config.lang,
+            )
+            sd.play(samples, sr)
+            sd.wait()
             return
         except Exception:
             pass
@@ -55,10 +63,8 @@ def speak_reply(text: str, tts_engine=None) -> None:
     subprocess.run(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd], capture_output=True)
 
 
-def record_audio_interactive(sample_rate: int = 16000, output_path: str = "samples/mic_input.wav") -> np.ndarray:
-    """Records audio from microphone until the user presses Enter."""
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
+def record_audio_interactive(sample_rate: int = 16000) -> np.ndarray:
+    """Records audio from microphone in RAM only (no file saved) until Enter is pressed."""
     print("\n>>> [RECORDING IN PROGRESS] Speak into your microphone now...")
     print(">>> [PRESS ENTER WHEN DONE SPEAKING] >>> ", end="", flush=True)
 
@@ -82,11 +88,6 @@ def record_audio_interactive(sample_rate: int = 16000, output_path: str = "sampl
     max_val = np.abs(audio_data).max()
     if max_val > 1e-4:
         audio_data = audio_data / max_val * 0.95
-
-    try:
-        sf.write(output_path, audio_data, sample_rate, subtype="PCM_16")
-    except Exception:
-        pass
 
     return audio_data
 
