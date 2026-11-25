@@ -51,6 +51,14 @@ UNIFIED_GEMINI_PROMPT = (
     "   - pause | resume | next | previous\n"
     "   - volume (value: up|down|mute|unmute)\n"
     "   - type_text (query: text to type)\n"
+    "   - mouse (value: click|double_click|right_click|move, target: 'x,y' for move)\n"
+    "   - run_terminal (query: shell command -> set needs_confirmation=true)\n"
+    "   - see_screen (query: question about current screen)\n"
+    "   - file_op (value: list|read|mkdir|write|search, target: relative path, query: content)\n"
+    "   - memory_op (value: remember|forget|list, query: fact or search)\n"
+    "   - git_op (value: status|log|open_github)\n"
+    "   - calendar_op (value: add|list|open_gmail|open_calendar, query: title, target: when)\n"
+    "   - web_fetch (target: weather|wikipedia, query: city or topic)\n"
     "   - system (value: shutdown|restart|sleep|lock -> set needs_confirmation=true)\n"
     "   - get_time | get_date\n"
 )
@@ -93,14 +101,19 @@ class GeminiModel:
         user_text: str,
         json_mode: bool = False,
         history: list[dict] | None = None,
+        memory_context: list[str] | None = None,
     ) -> str:
         if not self.is_configured:
             raise ModelUnavailable("GEMINI_API_KEY is not configured.")
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
-        gen_cfg: dict = {"temperature": 0.2 if json_mode else 0.4, "maxOutputTokens": 350}
+        gen_cfg: dict = {"temperature": 0.2 if json_mode else 0.4, "maxOutputTokens": 400}
         if json_mode:
             gen_cfg["responseMimeType"] = "application/json"
+
+        full_sys = system_prompt
+        if memory_context:
+            full_sys += "\n\nRelevant Memory Context:\n" + "\n".join(memory_context)
 
         contents = []
         if history:
@@ -110,7 +123,7 @@ class GeminiModel:
         contents.append({"role": "user", "parts": [{"text": user_text}]})
 
         body = json.dumps({
-            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "systemInstruction": {"parts": [{"text": full_sys}]},
             "contents": contents,
             "generationConfig": gen_cfg,
         }).encode("utf-8")
@@ -125,11 +138,11 @@ class GeminiModel:
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, KeyError, IndexError) as e:
             raise ModelUnavailable(str(e)) from e
 
-    def chat_answer(self, text: str, history: list[dict] | None = None) -> str:
-        return self._generate(CHAT_SYSTEM_PROMPT, text, json_mode=False, history=history)
+    def chat_answer(self, text: str, history: list[dict] | None = None, memory_context: list[str] | None = None) -> str:
+        return self._generate(CHAT_SYSTEM_PROMPT, text, json_mode=False, history=history, memory_context=memory_context)
 
-    def plan(self, text: str, history: list[dict] | None = None) -> Plan:
-        raw = self._generate(UNIFIED_GEMINI_PROMPT, text, json_mode=True, history=history)
+    def plan(self, text: str, history: list[dict] | None = None, memory_context: list[str] | None = None) -> Plan:
+        raw = self._generate(UNIFIED_GEMINI_PROMPT, text, json_mode=True, history=history, memory_context=memory_context)
         try:
             return Plan.model_validate_json(raw)
         except ValidationError as e:

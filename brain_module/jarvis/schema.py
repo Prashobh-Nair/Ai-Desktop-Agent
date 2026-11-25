@@ -45,6 +45,13 @@ class Action(str, Enum):
     GET_TIME = "get_time"      # code looks up the current time
     GET_DATE = "get_date"      # code looks up today's date
     SEE_SCREEN = "see_screen"  # local vision model inspects the current screen
+    MOUSE = "mouse"            # value = click | double_click | right_click | move
+    RUN_TERMINAL = "run_terminal"  # query = shell command (requires permission)
+    FILE_OP = "file_op"        # value = list | read | mkdir | write | search
+    MEMORY_OP = "memory_op"    # value = remember | forget | list
+    GIT_OP = "git_op"          # value = status | log | open_github
+    CALENDAR_OP = "calendar_op"  # value = add | list | open_gmail | open_calendar
+    WEB_FETCH = "web_fetch"    # target = weather | wikipedia, query = search
 
 
 class Step(BaseModel):
@@ -65,7 +72,7 @@ class Plan(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
-# These system actions are dangerous, so the user must always confirm them.
+# These system/shell actions are dangerous, so the user must always confirm them.
 RISKY_SYSTEM_VALUES = {"shutdown", "restart", "sleep", "lock"}
 
 
@@ -73,5 +80,7 @@ def enforce_safety(plan: Plan) -> Plan:
     """Force needs_confirmation=True for risky steps, whatever the model said."""
     for step in plan.steps:
         if step.action == Action.SYSTEM and step.value in RISKY_SYSTEM_VALUES:
+            plan.needs_confirmation = True
+        elif step.action == Action.RUN_TERMINAL:
             plan.needs_confirmation = True
     return plan

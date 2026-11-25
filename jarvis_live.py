@@ -37,6 +37,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from inference import SpeechRecognizer
+from src.autonomous import AutonomousGoalRunner, BackgroundTaskManager
 from src.executor import ActionExecutor
 from src.vision_engine import LocalScreenVision
 from brain_module.jarvis.brain import Brain
@@ -275,12 +276,14 @@ def main():
         stt_recognizer.whisper_engine.initialize()
         print(f"      [OK] Whisper-Base (74M) ready ({time.time() - t0:.2f}s)")
 
-    # 3. Brain + Executor + Screen Vision
-    print("[3/3] Loading Brain, OS/Browser Executor & Screen Vision...")
+    # 3. Brain + Executor + Screen Vision + Autonomous Runner
+    print("[3/3] Loading Brain, Tools, Memory & Autonomous Runner...")
     t0 = time.time()
     brain = Brain(mode="auto")
     executor = ActionExecutor()
     vision = LocalScreenVision()
+    bg_manager = BackgroundTaskManager()
+    goal_runner = AutonomousGoalRunner(brain=brain, executor=executor, vision=vision)
     if getattr(brain, "gemini_available", False):
         engine_desc = "Gemini 3.1 Flash Lite + Local Rules"
     elif brain.ollama_available:
@@ -312,6 +315,11 @@ def main():
 
     while True:
         try:
+            # Deliver any proactive background notifications
+            for note in bg_manager.pop_notifications():
+                print(f"\n[NOTIFICATION] {note}")
+                speak_reply(note, tts_engine, barge_threshold)
+
             if args.push_to_talk:
                 print(f"\n[TURN #{turn}] Press [ENTER] to speak (or 'q' to quit): ", end="", flush=True)
                 choice = sys.stdin.readline().strip()
@@ -360,39 +368,38 @@ def main():
                 speak_reply("Going to standby. Say Hey Jarvis when you need me.", tts_engine, barge_threshold)
                 continue
 
-            # Brain Reasoning
+            if lower_cmd in ("task status", "background tasks", "what tasks are running"):
+                summary = bg_manager.status_summary()
+                print(f">>> JARVIS : \"{summary}\"")
+                speak_reply(summary, tts_engine, barge_threshold)
+                continue
+
+            if lower_cmd.startswith(("run in background ", "in background ")):
+                bg_obj = re.sub(r"^(?:run\s+)?in\s+background\s+", "", recognized_text, flags=re.IGNORECASE).strip()
+                tid = bg_manager.submit(bg_obj[:32], lambda o=bg_obj: goal_runner.run_objective(o, session_id="bg")[0])
+                msg = f"Started {tid} in the background. I will notify you when it finishes."
+                print(f">>> JARVIS : \"{msg}\"")
+                speak_reply(msg, tts_engine, barge_threshold)
+                continue
+
+            def _confirm_cli(prompt_txt: str) -> bool:
+                speak_reply(f"{prompt_txt} Please type yes in the terminal to confirm.", tts_engine, barge_threshold)
+                return input("[!] Confirm risky action? (yes/no): ").strip().lower() in ("y", "yes")
+
+            # Autonomous Multi-Step Brain + Tools + Screen Vision + Action Execution
             t_brain = time.time()
-            brain_out = brain.plan(recognized_text, session_id="live_jarvis")
-            plan = brain_out.get("plan", {})
-            intent = plan.get("intent", "chat")
-            spoken_reply = plan.get("reply") or "I processed your request."
-            backend = brain_out.get("backend", "model")
+            spoken_reply, action_logs = goal_runner.run_objective(
+                recognized_text, session_id="live_jarvis", confirm_fn=_confirm_cli
+            )
             latency_brain = time.time() - t_brain
 
-            steps = plan.get("steps") or []
-            if any(s.get("action") == "see_screen" for s in steps):
-                print("[*] Analyzing screen with local SmolVLM-256M...")
-                spoken_reply = vision.analyze_screen(recognized_text)
-                steps = [s for s in steps if s.get("action") != "see_screen"]
-                plan["steps"] = steps
+            print(f">>> JARVIS : \"{spoken_reply}\" ({latency_brain:.2f}s)")
+            for log in action_logs:
+                print(f"[ACTION] {log}")
 
-            print(f">>> JARVIS : \"{spoken_reply}\" ({backend} | {intent} | {latency_brain:.2f}s)")
-
-            # Interruptible TTS
             interrupted = speak_reply(spoken_reply, tts_engine, barge_threshold)
             if interrupted:
                 print("[*] Interrupted — listening...")
-
-            # Execute OS / Browser steps
-            if steps:
-                if plan.get("needs_confirmation"):
-                    speak_reply("Please type yes in the terminal to confirm.", tts_engine, barge_threshold)
-                    confirm = input("[!] Confirm risky system action? (yes/no): ").strip().lower()
-                    if confirm not in ("y", "yes"):
-                        print("[*] Action cancelled.")
-                        continue
-                for log in executor.execute_plan(plan):
-                    print(f"[ACTION] {log}")
 
             active_until = time.monotonic() + ACTIVE_WINDOW_SECS
             turn += 1

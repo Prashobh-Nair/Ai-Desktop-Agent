@@ -95,13 +95,52 @@ class RulesPlanner:
                 reply="You are very welcome! Let me know if you need anything else.",
                 confidence=1.0,
             )
-        if re.search(r"\b(?:are\s+you\s+(?:there|ready|listening|online)|system\s+status|status)\b", clean_raw) or clean_raw in ("status", "ready"):
+        if re.search(r"\b(?:check\s+)?git\s+status\b", clean_raw):
+            return Plan(intent=Intent.INFO, steps=[Step(action=Action.GIT_OP, value="status")], reply="Checking git status.", confidence=1.0)
+        if re.search(r"\b(?:are\s+you\s+(?:there|ready|listening|online)|system\s+status)\b", clean_raw) or clean_raw in ("status", "ready"):
             return Plan(
                 intent=Intent.CHAT,
                 steps=[],
                 reply="All systems are nominal and ready for commands.",
                 confidence=1.0,
             )
+
+        # --- memory controls (Intent.INFO -> Action.MEMORY_OP) ---
+        m_rem = re.match(r"^(?:remember(?:\s+that)?|save\s+(?:in\s+)?memory(?:\s+that)?)\s+(?P<fact>.+)$", text.strip(), re.IGNORECASE)
+        if m_rem:
+            return Plan(
+                intent=Intent.INFO,
+                steps=[Step(action=Action.MEMORY_OP, value="remember", query=m_rem.group("fact").strip())],
+                reply="Okay, I will remember that.",
+                confidence=1.0,
+            )
+        m_fgt = re.match(r"^forget\s+(?P<q>.+)$", text.strip(), re.IGNORECASE)
+        if m_fgt:
+            return Plan(
+                intent=Intent.INFO,
+                steps=[Step(action=Action.MEMORY_OP, value="forget", query=m_fgt.group("q").strip())],
+                reply="Updating your memory now.",
+                confidence=1.0,
+            )
+        if re.search(r"\b(?:what\s+do\s+you\s+remember|show\s+(?:my\s+)?memor(?:y|ies)|list\s+memor(?:y|ies))\b", clean_raw):
+            return Plan(
+                intent=Intent.INFO,
+                steps=[Step(action=Action.MEMORY_OP, value="list")],
+                reply="Checking your saved memories.",
+                confidence=1.0,
+            )
+
+        # --- git / github / calendar / weather ---
+        if re.search(r"\b(?:git\s+log|recent\s+commits|last\s+commits)\b", clean_raw):
+            return Plan(intent=Intent.INFO, steps=[Step(action=Action.GIT_OP, value="log")], reply="Checking recent commits.", confidence=1.0)
+        if re.search(r"\bopen\s+github\b", clean_raw):
+            return Plan(intent=Intent.OPEN_WEBSITE, steps=[Step(action=Action.GIT_OP, value="open_github")], reply="Opening GitHub repository.", confidence=1.0)
+        if re.search(r"\b(?:my\s+schedule|upcoming\s+events|show\s+calendar|check\s+calendar)\b", clean_raw):
+            return Plan(intent=Intent.INFO, steps=[Step(action=Action.CALENDAR_OP, value="list")], reply="Checking your calendar.", confidence=1.0)
+        m_w = re.search(r"\bweather(?:\s+in\s+(?P<city>[a-z\s]+))?$", clean_raw)
+        if m_w:
+            city = (m_w.group("city") or "").strip()
+            return Plan(intent=Intent.INFO, steps=[Step(action=Action.WEB_FETCH, target="weather", query=city)], reply="Checking the weather.", confidence=1.0)
 
         # --- screen understanding (Intent.INFO -> Action.SEE_SCREEN) ---
         if re.search(

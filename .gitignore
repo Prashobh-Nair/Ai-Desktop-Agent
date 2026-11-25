@@ -41,3 +41,6 @@ Thumbs.db
 # Environment & API Secrets
 .env
 .env.local
+
+# Personal & Project Memory Stores
+memory/

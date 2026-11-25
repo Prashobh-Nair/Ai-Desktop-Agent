@@ -21,6 +21,10 @@ import urllib.request
 import webbrowser
 from typing import Dict, List, Optional, Tuple
 
+import psutil
+
+from src.tools import calendar_op, file_op, git_op, web_fetch
+
 
 # ---------------------------------------------------------------------------
 # Windows Virtual Key Codes & Input Helpers (Zero external dependencies)
@@ -264,6 +268,18 @@ class ActionExecutor:
             pass
         return None
 
+    def _is_process_running(self, target: str) -> bool:
+        t = (target or "").strip().lower()
+        exe = CLOSE_PROCESS_MAP.get(t, f"{t}.exe" if not t.endswith(".exe") else t).lower()
+        for proc in psutil.process_iter(["name"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if name == exe or t in name:
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return False
+
     def open_app(self, target: str) -> str:
         t = (target or "").strip().lower()
         if t in WEB_APPS:
@@ -276,7 +292,9 @@ class ActionExecutor:
                 os.startfile(cmd)
             else:
                 subprocess.Popen(f'start "" "{cmd}"', shell=True)
-            return f"Launched {t}."
+            time.sleep(0.35)
+            verified = self._is_process_running(t)
+            return f"Launched {t} (verified active)." if verified else f"Launched {t}."
         except Exception as e:
             return f"Failed to open {t}: {e}"
 
@@ -293,7 +311,8 @@ class ActionExecutor:
             text=True,
         )
         if res.returncode == 0:
-            return f"Closed {t}."
+            verified = not self._is_process_running(t)
+            return f"Closed {t} (verified stopped)." if verified else f"Closed {t}."
         return f"{t} is not currently running."
 
     def open_url(self, url: str) -> str:
@@ -371,7 +390,45 @@ class ActionExecutor:
             return "Restarting in 5 seconds."
         return f"Unknown system command: {v}."
 
-    def execute_plan(self, plan: Dict) -> List[str]:
+    def control_mouse(self, value: str, target: str = "") -> str:
+        user32 = ctypes.windll.user32
+        v = (value or "click").strip().lower()
+        if v == "move" and "," in (target or ""):
+            try:
+                x, y = [int(p.strip()) for p in target.split(",", 1)]
+                user32.SetCursorPos(x, y)
+                return f"Moved mouse to ({x}, {y})."
+            except ValueError:
+                return f"Invalid coordinates: {target}"
+        if v in ("click", "left_click"):
+            user32.mouse_event(0x0002, 0, 0, 0, 0)
+            user32.mouse_event(0x0004, 0, 0, 0, 0)
+            return "Clicked mouse."
+        if v == "double_click":
+            for _ in range(2):
+                user32.mouse_event(0x0002, 0, 0, 0, 0)
+                user32.mouse_event(0x0004, 0, 0, 0, 0)
+                time.sleep(0.05)
+            return "Double-clicked mouse."
+        if v == "right_click":
+            user32.mouse_event(0x0008, 0, 0, 0, 0)
+            user32.mouse_event(0x0010, 0, 0, 0, 0)
+            return "Right-clicked mouse."
+        return f"Unknown mouse action: {v}"
+
+    def run_terminal(self, command: str) -> str:
+        cmd = (command or "").strip()
+        if not cmd:
+            return "No terminal command provided."
+        try:
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+            out = (res.stdout or res.stderr or "").strip()
+            status = "OK" if res.returncode == 0 else f"exit {res.returncode}"
+            return f"[{status}] {out[:300]}" if out else f"[{status}] Command completed."
+        except Exception as e:
+            return f"Terminal command failed: {e}"
+
+    def execute_plan(self, plan: Dict, memory=None) -> List[str]:
         """Executes all steps in a Brain Plan dictionary and returns status logs."""
         steps = plan.get("steps") or []
         if not steps:
@@ -424,5 +481,29 @@ class ActionExecutor:
                 logs.append(f"Typed text: '{query}'.")
             elif action == "system":
                 logs.append(self.control_system(value))
+            elif action == "mouse":
+                logs.append(self.control_mouse(value, target))
+            elif action == "run_terminal":
+                logs.append(self.run_terminal(query or value))
+            elif action == "file_op":
+                logs.append(file_op(value or "list", target or ".", query))
+            elif action == "git_op":
+                logs.append(git_op(value or "status", target))
+            elif action == "calendar_op":
+                logs.append(calendar_op(value or "list", query or target, target))
+            elif action == "web_fetch":
+                logs.append(web_fetch(query or target, target or "weather"))
+            elif action == "memory_op" and memory is not None:
+                op = (value or "list").lower()
+                if op == "remember":
+                    logs.append(memory.remember(query or target))
+                elif op == "forget":
+                    logs.append(memory.forget(query or target))
+                else:
+                    items = memory.list_memories()
+                    logs.append(
+                        "Saved memories: " + "; ".join(i["fact"] for i in items[-5:])
+                        if items else "No saved personal memories yet."
+                    )
 
         return logs
