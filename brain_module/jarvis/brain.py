@@ -182,7 +182,9 @@ class Brain:
                     plan, used = llm.plan(text), backend_name
 
                 has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
-                if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
+                has_play_step = any(s.action == Action.PLAY for s in plan.steps)
+                # Only suppress bare web-search if NO play step (search+play is intentional multi-step)
+                if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not has_play_step and not _EXPLICIT_SEARCH_RE.search(text):
                     answer = llm.chat_answer(text, history=history, memory_context=mem_context) if backend_name in ("groq", "gemini") else llm.chat_answer(text)
                     plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
             except (ModelUnavailable, BadModelOutput) as e:
@@ -191,7 +193,8 @@ class Brain:
                     try:
                         plan, used = self.gemini.plan(text, history=history, memory_context=mem_context), "gemini"
                         has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
-                        if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
+                        has_play_step = any(s.action == Action.PLAY for s in plan.steps)
+                        if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not has_play_step and not _EXPLICIT_SEARCH_RE.search(text):
                             answer = self.gemini.chat_answer(text, history=history, memory_context=mem_context)
                             plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
                     except (ModelUnavailable, BadModelOutput) as eg:

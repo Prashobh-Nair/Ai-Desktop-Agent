@@ -94,7 +94,7 @@ class GroqBrainModel:
 
     ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
-    def __init__(self, api_key: str | None = None, model_name: str = "openai/gpt-oss-20b", timeout: float = 8.0):
+    def __init__(self, api_key: str | None = None, model_name: str = "openai/gpt-oss-20b", timeout: float = 6.0):
         _load_env_file()
         self.api_key = (api_key or os.getenv("GROQ_API_KEY", "")).strip()
         self.model_name = model_name
@@ -130,7 +130,7 @@ class GroqBrainModel:
             "model": self.model_name,
             "messages": messages,
             "temperature": 0.2 if json_mode else 0.4,
-            "max_tokens": 400,
+            "max_tokens": 180,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}

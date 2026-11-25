@@ -169,7 +169,7 @@ class LocalScreenVision:
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": 250},
         }).encode("utf-8")
 
-        for model_id in ("gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3-flash-preview"):
+        for model_id in ("gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-flash-lite-latest", "gemini-flash-latest"):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
             req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
             try:
@@ -215,15 +215,25 @@ class LocalScreenVision:
     def analyze_screen(self, question: Optional[str] = None) -> str:
         """Analyzes the live screen buffer (or captures fresh) via Gemini Vision -> SmolVLM."""
         img = None
+        age = None
         with self._frame_lock:
             if self._latest_frame is not None and (time.time() - self._latest_frame_ts) < 4.0:
                 img = self._latest_frame
+                age = round(time.time() - self._latest_frame_ts, 1)
         if img is None:
             try:
                 img = self.capture_screen(max_width=768)
+                print("[Vision] Fresh screen captured.", flush=True)
             except RuntimeError as e:
                 return str(e)
+        else:
+            print(f"[Vision] Using buffered frame ({age}s old).", flush=True)
         try:
+            api_key = _load_gemini_key()
+            if api_key and api_key != "your_gemini_api_key_here":
+                print("[Vision] Sending to Gemini Vision API...", flush=True)
+            else:
+                print("[Vision] No Gemini key — using local SmolVLM-256M.", flush=True)
             return self.analyze_image(img, question)
         except Exception as e:
             return f"Could not analyze screen: {e}"
