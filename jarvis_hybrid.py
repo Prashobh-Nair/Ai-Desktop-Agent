@@ -227,7 +227,7 @@ def main() -> None:
 
             lower_cmd = recognized_text.lower().strip(".,!? ")
             if lower_cmd in ("exit", "quit", "bye jarvis", "goodbye", "shut down jarvis"):
-                speak_reply("Goodbye! Have a great day.", fallback_tts)
+                speak_reply("Alright, catch you later!", fallback_tts)
                 break
 
             if lower_cmd in ("task status", "background tasks", "what tasks are running"):
@@ -239,19 +239,19 @@ def main() -> None:
             if lower_cmd.startswith(("run in background ", "in background ")):
                 bg_obj = re.sub(r"^(?:run\s+)?in\s+background\s+", "", recognized_text, flags=re.IGNORECASE).strip()
                 tid = bg_manager.submit(bg_obj[:32], lambda o=bg_obj: goal_runner.run_objective(o, session_id="bg")[0])
-                msg = f"Started {tid} in the background. I will notify you when it finishes."
+                msg = f"Got it, running {tid} in the background. I'll let you know when it's done."
                 print(f">>> JARVIS : \"{msg}\"")
                 speak_reply(msg, fallback_tts)
                 continue
 
             plan_res = brain.plan(recognized_text)
             plan = plan_res["plan"]
-            reply = plan.get("reply") or "Okay."
+            reply = plan.get("reply") or "Got it."
 
             steps = plan.get("steps") or []
             if steps:
                 if plan.get("needs_confirmation"):
-                    confirm_q = plan.get("clarification_question") or f"{reply} Please say yes to confirm."
+                    confirm_q = plan.get("clarification_question") or f"{reply} Just say yes to go ahead."
                     print(f">>> JARVIS : \"{confirm_q}\"")
                     speak_reply(confirm_q, fallback_tts)
                     if args.text:
@@ -262,14 +262,21 @@ def main() -> None:
                         print("[MIC OFF]", flush=True)
                         ans = stt.transcribe_with_metadata(c_audio)["text"].lower() if c_audio is not None and len(c_audio) >= 1600 else ""
                     if not any(w in ans for w in ("yes", "yeah", "confirm", "sure", "ok", "okay", "do it", "proceed")):
-                        reply = "Cancelled."
+                        reply = "No worries, cancelled."
                         print(f">>> JARVIS : \"{reply}\"")
                         speak_reply(reply, fallback_tts)
                         continue
 
                 outputs = executor.execute_plan(plan, memory=brain.memory, vision=vision)
                 if outputs:
-                    reply = " ".join(o for o in outputs if o)
+                    info_actions = {"see_screen", "get_time", "get_date", "web_fetch", "file_op", "git_op", "memory_op", "calendar_op", "run_terminal"}
+                    has_info = any(s.get("action") in info_actions for s in steps)
+                    err_outputs = [o for o in outputs if o and any(k in o.lower() for k in ("could not", "failed", "not found", "unavailable", "screen check:"))]
+                    if err_outputs:
+                        reply = " ".join(err_outputs)
+                    elif has_info:
+                        info_outs = [o for s, o in zip(steps, outputs) if o and s.get("action") in info_actions]
+                        reply = " ".join(info_outs) if info_outs else " ".join(o for o in outputs if o)
 
             print(f">>> JARVIS : \"{reply}\"")
             speak_reply(reply, fallback_tts)

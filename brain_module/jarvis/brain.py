@@ -29,21 +29,25 @@ _CHAT_QUESTION_RE = re.compile(
 )
 
 
-def make_reply(plan: Plan) -> str:
+def make_reply(plan: Plan, preserve_llm_reply: bool = False) -> str:
     """A short sentence for the TTS module to speak."""
     if plan.intent in (Intent.CLARIFY, Intent.UNKNOWN) and plan.clarification_question:
         return plan.clarification_question
     if plan.reply and plan.intent == Intent.CHAT:
         return plan.reply          # the model wrote the answer itself
     if not plan.steps:
-        return plan.reply or "Okay."
+        return plan.reply or "Got it."
     first = plan.steps[0]
     if first.action == Action.GET_TIME:
         return "It's " + datetime.now().strftime("%I:%M %p").lstrip("0") + "."
     if first.action == Action.GET_DATE:
         return "Today is " + datetime.now().strftime("%A, %d %B %Y") + "."
     if plan.needs_confirmation:
-        return f"Do you really want me to {first.value} the laptop?"
+        if preserve_llm_reply and plan.reply:
+            return plan.reply
+        return f"Just checking — do you want me to {first.value or 'run that'}?"
+    if preserve_llm_reply and plan.reply:
+        return plan.reply
     play = next((s for s in plan.steps if s.action == Action.PLAY), None)
     if play:
         q = next((s.query for s in plan.steps if s.action == Action.SEARCH), None)
@@ -237,7 +241,7 @@ class Brain:
             if s.action in NEEDS_APP and not s.target:
                 s.target = ctx.get("last_app")
 
-        plan.reply = make_reply(plan)
+        plan.reply = make_reply(plan, preserve_llm_reply=(used != "rules"))
 
         # Save turn to session memory
         self.memory.add_turn(session_id, text, plan.reply or "")
