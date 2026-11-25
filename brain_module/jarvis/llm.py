@@ -106,7 +106,6 @@ class GeminiModel:
         if not self.is_configured:
             raise ModelUnavailable("GEMINI_API_KEY is not configured.")
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
         gen_cfg: dict = {"temperature": 0.2 if json_mode else 0.4, "maxOutputTokens": 400}
         if json_mode:
             gen_cfg["responseMimeType"] = "application/json"
@@ -128,15 +127,35 @@ class GeminiModel:
             "generationConfig": gen_cfg,
         }).encode("utf-8")
 
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read())
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except urllib.error.HTTPError as e:
-            raise ModelUnavailable(f"Gemini error {e.code}: {e.read().decode(errors='ignore')[:200]}") from e
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, KeyError, IndexError) as e:
-            raise ModelUnavailable(str(e)) from e
+        models_to_try: list[str] = []
+        for m in (
+            self.model_name,
+            "gemini-flash-lite-latest",
+            "gemini-flash-latest",
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite",
+        ):
+            if m and m not in models_to_try:
+                models_to_try.append(m)
+
+        last_err: Exception | None = None
+        for idx, model_id in enumerate(models_to_try):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={self.api_key}"
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    data = json.loads(resp.read())
+                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except urllib.error.HTTPError as e:
+                err_msg = e.read().decode(errors="ignore")[:200]
+                last_err = ModelUnavailable(f"Gemini error {e.code} ({model_id}): {err_msg}")
+                if e.code in (404, 429, 500, 503, 504) and idx + 1 < len(models_to_try):
+                    continue
+                raise last_err from e
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, KeyError, IndexError) as e:
+                raise ModelUnavailable(str(e)) from e
+
+        raise last_err or ModelUnavailable("Gemini request failed.")
 
     def chat_answer(self, text: str, history: list[dict] | None = None, memory_context: list[str] | None = None) -> str:
         return self._generate(CHAT_SYSTEM_PROMPT, text, json_mode=False, history=history, memory_context=memory_context)

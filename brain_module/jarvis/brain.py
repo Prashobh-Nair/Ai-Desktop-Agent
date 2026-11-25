@@ -190,13 +190,24 @@ class Brain:
                                         ans = self.model.chat_answer(text)
                                         plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
                                     else:
-                                        plan, used = self.model.plan(text), "model"
+                                        try:
+                                            plan, used = self.model.plan(text), "model"
+                                        except BadModelOutput:
+                                            ans = self.model.chat_answer(text)
+                                            plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), "model"
                                 except (ModelUnavailable, BadModelOutput) as e2:
                                     plan, note = self.rules.plan(text, ctx), f"models failed, used rules: {e2}"
                             else:
                                 plan, note = self.rules.plan(text, ctx), f"gemini failed ({e}), used rules"
                         else:
-                            plan, note = self.rules.plan(text, ctx), f"model failed, used rules: {e}"
+                            if isinstance(e, BadModelOutput):
+                                try:
+                                    ans = llm.chat_answer(text)
+                                    plan, used = Plan(intent=Intent.CHAT, steps=[], reply=ans, confidence=1.0), backend_name
+                                except (ModelUnavailable, BadModelOutput) as e2:
+                                    plan, note = self.rules.plan(text, ctx), f"model failed, used rules: {e2}"
+                            else:
+                                plan, note = self.rules.plan(text, ctx), f"model failed, used rules: {e}"
                 else:
                     plan = self.rules.plan(text, ctx)
 
