@@ -11,6 +11,13 @@ Authors:
 
 import os
 import sys
+
+# Prevent OpenBLAS/MKL thread-pool over-allocation on 8GB RAM laptops
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
+
+import subprocess
 import time
 from pathlib import Path
 import sounddevice as sd
@@ -25,7 +32,26 @@ if str(PROJECT_ROOT) not in sys.path:
 from inference import SpeechRecognizer
 from src.executor import ActionExecutor
 from brain_module.jarvis.brain import Brain
-from tts_module.src.tts_engine import speak, get_tts_engine
+
+
+def speak_reply(text: str, tts_engine=None) -> None:
+    """Speaks text using Kokoro-82M, falling back to Windows SAPI5 if RAM is tight."""
+    clean = " ".join((text or "").split())
+    if not clean:
+        return
+    if tts_engine is not None:
+        try:
+            tts_engine.speak(clean, blocking=True)
+            return
+        except Exception:
+            pass
+    safe = clean.replace("'", "''")
+    ps_cmd = (
+        "Add-Type -AssemblyName System.Speech; "
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$s.Rate = 1; $s.Speak('{safe}')"
+    )
+    subprocess.run(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd], capture_output=True)
 
 
 def record_audio_interactive(sample_rate: int = 16000, output_path: str = "samples/mic_input.wav") -> np.ndarray:
@@ -73,35 +99,51 @@ def main():
     print("=" * 70)
     print("[*] Initializing local neural models across all 3 modules...\n")
 
-    # 1. Initialize Module 1 (Whisper STT)
-    print("[1/3] Loading Module 1: Whisper-Base (74M Parameters) STT Engine...")
+    # 1. Initialize Module 3 (Kokoro TTS first before STT/LLM reserve RAM, with SAPI5 fallback)
+    print("[1/3] Loading Module 3: Kokoro-82M Neural Text-to-Speech Engine...")
     t0 = time.time()
-    stt_recognizer = SpeechRecognizer(engine="whisper", model_size="base")
-    print(f"      [OK] Whisper STT ready ({time.time() - t0:.2f}s)")
+    tts_engine = None
+    try:
+        from tts_module.src.tts_engine import get_tts_engine
+        tts_engine = get_tts_engine()
+        print(f"      [OK] Kokoro TTS ready ({time.time() - t0:.2f}s)")
+    except Exception:
+        print("      [OK] Using fast Windows SAPI5 TTS fallback")
 
-    # 2. Initialize Module 2 (Brain) & Module 4 (OS/Browser Executor)
-    print("[2/3] Loading Module 2: Jarvis Brain / Reasoning Engine...")
+    # 2. Initialize Module 1 (Local Whisper STT)
+    print("[2/3] Loading Module 1: Local Whisper-Small.en (244M) STT Engine...")
+    t0 = time.time()
+    try:
+        stt_recognizer = SpeechRecognizer(engine="whisper", model_size="small.en")
+        stt_recognizer.whisper_engine.initialize()
+        print(f"      [OK] Whisper-Small.en (244M) ready ({time.time() - t0:.2f}s)")
+    except Exception:
+        stt_recognizer = SpeechRecognizer(engine="whisper", model_size="base")
+        stt_recognizer.whisper_engine.initialize()
+        print(f"      [OK] Whisper-Base (74M) ready ({time.time() - t0:.2f}s)")
+
+    # 3. Initialize Module 2 (Brain) & Module 4 (OS/Browser Executor)
+    print("[3/3] Loading Module 2: Jarvis Brain & OS/Browser Executor...")
     t0 = time.time()
     brain = Brain(mode="auto")
     executor = ActionExecutor()
-    engine_desc = "Local Neural LLM (Jarvis via Ollama)" if brain.ollama_available else "Deterministic Rule-Based Fallback"
-    print(f"      [OK] Brain ready in mode: '{brain.mode}' -> Engine: {engine_desc} ({time.time() - t0:.2f}s)")
-    print("      [OK] OS & Browser Action Executor ready.")
-
-    # 3. Initialize Module 3 (Kokoro TTS)
-    print("[3/3] Loading Module 3: Kokoro-82M Neural Text-to-Speech Engine...")
-    t0 = time.time()
-    tts_engine = get_tts_engine()
-    print(f"      [OK] Kokoro TTS ready ({time.time() - t0:.2f}s)\n")
+    if getattr(brain, "gemini_available", False):
+        engine_desc = "Gemini 3.1 Flash Lite + Local Rules"
+    elif brain.ollama_available:
+        engine_desc = "Local Neural LLM (Ollama) + Rules"
+    else:
+        engine_desc = "Deterministic Rule-Based Engine"
+    print(f"      [OK] Brain ready in mode: '{brain.mode}' -> {engine_desc} ({time.time() - t0:.2f}s)")
+    print("      [OK] OS & Browser Action Executor ready.\n")
 
     print("-" * 70)
     print("All modules are online and ready! Welcome to Jarvis.")
     print("You can speak general knowledge questions (e.g. 'what is quantum physics?')")
-    print("or desktop control commands (e.g. 'open chrome', 'play song', 'time').")
+    print("or desktop/browser commands (e.g. 'open chrome', 'new tab', 'time').")
     print("-" * 70)
 
     # Introductory greeting from Jarvis
-    speak("Hello, I am Jarvis. All three modules are online and I am ready for your commands.")
+    speak_reply("Hello, I am Jarvis. All modules are online and I am ready for your commands.", tts_engine)
 
     turn = 1
     while True:
@@ -111,7 +153,7 @@ def main():
 
         if user_choice.lower() in ("q", "quit", "exit"):
             print("\nShutting down Jarvis. Goodbye!")
-            speak("Goodbye! Have a great day.")
+            speak_reply("Goodbye! Have a great day.", tts_engine)
             break
 
         # Record voice from microphone
@@ -122,7 +164,7 @@ def main():
 
         # Step 1: STT (Speech-to-Text)
         t_stt = time.time()
-        print("\n[*] Transcribing speech with 74M Neural Model...")
+        print("\n[*] Transcribing speech with local Whisper model...")
         stt_result = stt_recognizer.transcribe_with_metadata(audio_data)
         recognized_text = stt_result["text"].strip()
         latency_stt = time.time() - t_stt
@@ -146,9 +188,9 @@ def main():
         print(f">>> JARVIS   : \"{spoken_reply}\" (Engine: {backend} | Intent: {intent} | Latency: {latency_brain:.2f}s)")
 
         # Step 3: Speak reply first so feedback is immediate
-        print("[*] Speaking reply with Kokoro-82M Neural Engine...")
+        print("[*] Speaking reply...")
         t_tts = time.time()
-        speak(spoken_reply, blocking=True)
+        speak_reply(spoken_reply, tts_engine)
         latency_tts = time.time() - t_tts
 
         # Step 4: Execute OS & Browser Actions (if any)
@@ -158,7 +200,7 @@ def main():
                 confirm = input("[!] Confirm risky system action? (yes/no): ").strip().lower()
                 if confirm not in ("y", "yes"):
                     print("[*] Action cancelled.")
-                    speak("Action cancelled.")
+                    speak_reply("Action cancelled.", tts_engine)
                     turn += 1
                     continue
             exec_logs = executor.execute_plan(plan)
