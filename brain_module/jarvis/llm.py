@@ -55,6 +55,26 @@ class JarvisModel:
         except Exception:
             return False
 
+    def warmup(self) -> bool:
+        """Preloads the model into Ollama memory with a minimal 1-token call."""
+        if not self.is_reachable():
+            return False
+        body = json.dumps({
+            "model": self.name,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": False,
+            "keep_alive": "10m",
+            "options": {"num_predict": 1, "num_ctx": 512, "num_thread": 8},
+        }).encode()
+        req = urllib.request.Request(
+            f"{self.url}/api/chat", data=body, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20.0):
+                return True
+        except Exception:
+            return False
+
     def _chat(self, text: str) -> str:
         if not self.is_reachable():
             raise ModelUnavailable("Ollama daemon is not running on localhost:11434. Using deterministic rule-based planner.")
@@ -65,8 +85,8 @@ class JarvisModel:
                          {"role": "user", "content": text}],
             "stream": False,
             "format": "json",                 # Ollama only lets the model write valid JSON
-            "keep_alive": "30m",              # keep the model in memory between commands
-            "options": {"temperature": 0, "num_predict": 200},
+            "keep_alive": "10m",              # keep the model in memory between commands
+            "options": {"temperature": 0, "num_predict": 140, "num_ctx": 512, "num_thread": 8},
         }).encode()
         req = urllib.request.Request(f"{self.url}/api/chat", data=body,
                                      headers={"Content-Type": "application/json"})
@@ -91,7 +111,7 @@ class JarvisModel:
             ],
             "stream": False,
             "keep_alive": "10m",
-            "options": {"temperature": 0.3, "num_predict": 160},
+            "options": {"temperature": 0.3, "num_predict": 120, "num_ctx": 512, "num_thread": 8},
         }).encode()
         req = urllib.request.Request(
             f"{self.url}/api/chat",

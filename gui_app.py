@@ -3,8 +3,9 @@ Native Windows Desktop GUI for the AI-Powered Autonomous Desktop Agent.
 
 Simple, clean, light-themed student GUI built with Tkinter:
 - High-DPI sharp rendering on Windows.
-- Non-blocking execution: text reply appears immediately, and TTS speaks asynchronously.
-- Automatic Kokoro-82M TTS with Windows SAPI5 fallback if RAM is tight.
+- Preloads TTS -> STT -> Brain in optimal RAM order for maximum speed.
+- Non-blocking execution: reply appears immediately, and TTS speaks asynchronously.
+- Persistent SAPI5 fallback speaker (< 40ms) if Kokoro-82M hits low RAM.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
 
 import ctypes
+from datetime import datetime
 import queue
 import subprocess
 import threading
@@ -55,35 +57,75 @@ ACCENT = "#3b5b7d"
 ACCENT_HOVER = "#2f4966"
 ACCENT_TEXT = "#ffffff"
 BTN_HOVER = "#e4e8ee"
-STATUS_OK_BG = "#edf5ef"
-STATUS_OK_FG = "#2c663b"
+PILL_WAIT_BG = "#f0f2f5"
+PILL_WAIT_FG = "#656d76"
+PILL_OK_BG = "#edf5ef"
+PILL_OK_FG = "#2c663b"
 RECORD_BG = "#f6eaea"
 RECORD_FG = "#9c3b3b"
 
 
-def speak_with_fallback(text: str, tts_engine=None) -> None:
-    """Speaks text using Kokoro-82M, falling back to Windows SAPI5 if memory is tight."""
-    clean = (text or "").strip()
-    if not clean:
-        return
+class FastSpeaker:
+    """Uses Kokoro-82M when available, with a persistent Windows SAPI5 fallback (< 40ms)."""
 
-    if tts_engine is not None:
-        try:
-            tts_engine.speak(clean, blocking=True)
+    def __init__(self):
+        self.kokoro = None
+        self._sapi_proc: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
+
+    def _get_sapi_proc(self) -> subprocess.Popen:
+        if self._sapi_proc is None or self._sapi_proc.poll() is not None:
+            init_ps = (
+                "Add-Type -AssemblyName System.Speech; "
+                "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                "$s.Rate = 1; "
+                "while (($line = [Console]::In.ReadLine()) -ne $null) { "
+                "if ($line.Length -gt 0) { $s.Speak($line) } }"
+            )
+            self._sapi_proc = subprocess.Popen(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", init_ps],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+            )
+        return self._sapi_proc
+
+    def speak(self, text: str) -> None:
+        clean = " ".join((text or "").split())
+        if not clean:
             return
-        except Exception:
-            pass
 
-    safe_text = clean.replace("'", "''")
-    ps_cmd = (
-        "Add-Type -AssemblyName System.Speech; "
-        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-        f"$s.Rate = 1; $s.Speak('{safe_text}')"
-    )
-    subprocess.run(
-        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd],
-        capture_output=True,
-    )
+        if self.kokoro is not None:
+            try:
+                self.kokoro.speak(clean, blocking=True)
+                return
+            except Exception:
+                pass
+
+        with self._lock:
+            try:
+                proc = self._get_sapi_proc()
+                if proc.stdin:
+                    proc.stdin.write(clean + "\n")
+                    proc.stdin.flush()
+            except Exception:
+                pass
+
+    def stop(self) -> None:
+        if self.kokoro is not None:
+            try:
+                self.kokoro.stop()
+            except Exception:
+                pass
+        with self._lock:
+            if self._sapi_proc is not None and self._sapi_proc.poll() is None:
+                try:
+                    self._sapi_proc.terminate()
+                except Exception:
+                    pass
+                self._sapi_proc = None
 
 
 def _bind_hover(widget: tk.Widget, normal_bg: str, hover_bg: str) -> None:
@@ -95,15 +137,14 @@ class JarvisDesktopGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("AI-Powered Autonomous Desktop Agent — Jarvis")
-        self.root.geometry("820x600")
-        self.root.minsize(660, 480)
+        self.root.geometry("860x640")
+        self.root.minsize(680, 500)
         self.root.configure(bg=BG_MAIN)
 
         self.brain: Optional[Brain] = None
         self.executor = ActionExecutor()
         self.stt = None
-        self.tts = None
-        self.tts_mode = "Loading..."
+        self.speaker = FastSpeaker()
 
         self.speak_enabled = tk.BooleanVar(value=True)
         self.is_recording = False
@@ -130,22 +171,19 @@ class JarvisDesktopGUI:
         ).pack(anchor="w")
         tk.Label(
             title_frame,
-            text="Semester 5 Minor Project  •  STT, Brain, OS/Browser Automation & TTS",
+            text="Semester 5 Minor Project  •  Local Voice, Reasoning & Desktop Automation",
             font=("Segoe UI", 9),
             bg=BG_CARD,
             fg=TEXT_MUTED,
         ).pack(anchor="w", pady=(2, 0))
 
-        self.status_label = tk.Label(
-            header,
-            text="Initializing modules...",
-            font=("Segoe UI", 9),
-            bg=BG_SUBTLE,
-            fg=TEXT_MUTED,
-            padx=12,
-            pady=5,
-        )
-        self.status_label.pack(side=tk.RIGHT, padx=16)
+        # Separate Module Status Pills
+        pills = tk.Frame(header, bg=BG_CARD)
+        pills.pack(side=tk.RIGHT, padx=16)
+
+        self.pill_stt = self._make_pill(pills, "STT: Loading...")
+        self.pill_brain = self._make_pill(pills, "Brain: Loading...")
+        self.pill_tts = self._make_pill(pills, "TTS: Loading...")
 
         # Main Chat Card
         card = tk.Frame(self.root, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
@@ -153,7 +191,7 @@ class JarvisDesktopGUI:
 
         # Toolbar inside Chat Card
         toolbar = tk.Frame(card, bg=BG_CARD)
-        toolbar.pack(fill=tk.X, padx=16, pady=(10, 6))
+        toolbar.pack(fill=tk.X, padx=16, pady=(10, 8))
 
         tk.Label(
             toolbar,
@@ -165,7 +203,7 @@ class JarvisDesktopGUI:
 
         clear_btn = tk.Button(
             toolbar,
-            text="Clear Chat",
+            text="Clear",
             font=("Segoe UI", 9),
             bg=BG_SUBTLE,
             fg=TEXT_PRIMARY,
@@ -178,18 +216,32 @@ class JarvisDesktopGUI:
         clear_btn.pack(side=tk.RIGHT)
         _bind_hover(clear_btn, BG_SUBTLE, BTN_HOVER)
 
+        stop_voice_btn = tk.Button(
+            toolbar,
+            text="Stop Audio",
+            font=("Segoe UI", 9),
+            bg=BG_SUBTLE,
+            fg=TEXT_PRIMARY,
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=10,
+            pady=3,
+            command=self.speaker.stop,
+        )
+        stop_voice_btn.pack(side=tk.RIGHT, padx=(0, 8))
+        _bind_hover(stop_voice_btn, BG_SUBTLE, BTN_HOVER)
+
         tk.Checkbutton(
             toolbar,
-            text="Speak replies aloud",
+            text="Speak replies",
             variable=self.speak_enabled,
             font=("Segoe UI", 9),
             bg=BG_CARD,
             fg=TEXT_MUTED,
             activebackground=BG_CARD,
             cursor="hand2",
-        ).pack(side=tk.RIGHT, padx=(0, 14))
+        ).pack(side=tk.RIGHT, padx=(0, 12))
 
-        # Divider
         tk.Frame(card, bg=BORDER_COLOR, height=1).pack(fill=tk.X)
 
         # Chat History Area
@@ -200,19 +252,31 @@ class JarvisDesktopGUI:
             bg=BG_CARD,
             fg=TEXT_PRIMARY,
             relief=tk.FLAT,
-            padx=16,
-            pady=12,
+            padx=18,
+            pady=14,
             spacing1=2,
             spacing3=2,
             state=tk.DISABLED,
         )
         self.chat_box.pack(fill=tk.BOTH, expand=True)
+        self.chat_box.tag_configure("time", foreground="#8c959f", font=("Segoe UI", 8))
         self.chat_box.tag_configure("user", foreground="#2b4c70", font=("Segoe UI", 10, "bold"))
         self.chat_box.tag_configure("jarvis", foreground="#2c5e3b", font=("Segoe UI", 10, "bold"))
         self.chat_box.tag_configure("meta", foreground="#7a828c", font=("Segoe UI", 8))
         self.chat_box.tag_configure("action", foreground="#3b5b7d", font=("Segoe UI", 9))
 
-        # Divider above input
+        # Live Activity Bar
+        activity_bar = tk.Frame(card, bg=BG_CARD)
+        activity_bar.pack(fill=tk.X, padx=16, pady=(0, 6))
+        self.activity_label = tk.Label(
+            activity_bar,
+            text="Ready — type a command or press Speak",
+            font=("Segoe UI", 8),
+            bg=BG_CARD,
+            fg=TEXT_MUTED,
+        )
+        self.activity_label.pack(side=tk.LEFT)
+
         tk.Frame(card, bg=BORDER_COLOR, height=1).pack(fill=tk.X)
 
         # Input Bar
@@ -266,7 +330,7 @@ class JarvisDesktopGUI:
         self.send_btn.pack(side=tk.LEFT, padx=(0, 14), pady=12)
         _bind_hover(self.send_btn, ACCENT, ACCENT_HOVER)
 
-        # Clean Footer with Team Credits
+        # Footer
         footer = tk.Frame(self.root, bg=BG_MAIN)
         footer.pack(fill=tk.X, padx=18, pady=(0, 12))
         tk.Label(
@@ -278,7 +342,7 @@ class JarvisDesktopGUI:
         ).pack(side=tk.LEFT)
         tk.Label(
             footer,
-            text="100% Local Execution",
+            text="100% Local Offline Execution",
             font=("Segoe UI", 8),
             bg=BG_MAIN,
             fg=TEXT_MUTED,
@@ -286,8 +350,21 @@ class JarvisDesktopGUI:
 
         self._append_chat(
             "Jarvis",
-            "Hello! Type any question or desktop command below, or click Speak to talk to me.",
+            "Hello! I am ready. Ask me any question or give a desktop/browser command.",
         )
+
+    def _make_pill(self, parent: tk.Frame, text: str) -> tk.Label:
+        lbl = tk.Label(
+            parent,
+            text=text,
+            font=("Segoe UI", 8),
+            bg=PILL_WAIT_BG,
+            fg=PILL_WAIT_FG,
+            padx=8,
+            pady=4,
+        )
+        lbl.pack(side=tk.LEFT, padx=(6, 0))
+        return lbl
 
     def _start_background_workers(self) -> None:
         threading.Thread(target=self._tts_worker, daemon=True).start()
@@ -299,34 +376,49 @@ class JarvisDesktopGUI:
         except (tk.TclError, RuntimeError):
             pass
 
+    def _set_activity(self, text: str) -> None:
+        self._safe_after(lambda: self.activity_label.config(text=text))
+
     def _init_models(self) -> None:
+        # 1. Load TTS first (before Ollama allocates RAM)
         try:
             from tts_module.src.tts_engine import get_tts_engine
-            self.tts = get_tts_engine()
-            self.tts_mode = "Kokoro-82M"
+            self.speaker.kokoro = get_tts_engine()
+            tts_txt = "TTS: Kokoro-82M"
         except Exception:
-            self.tts = None
-            self.tts_mode = "Windows SAPI5"
+            self.speaker.kokoro = None
+            tts_txt = "TTS: SAPI5 Fast"
+        self._safe_after(lambda: self.pill_tts.config(text=tts_txt, bg=PILL_OK_BG, fg=PILL_OK_FG))
 
+        # 2. Preload STT (Whisper 74M) so first voice turn has zero load delay
+        try:
+            from inference import SpeechRecognizer
+            self.stt = SpeechRecognizer(engine="whisper", model_size="base")
+            self.stt.whisper_engine.initialize()
+            stt_txt = "STT: Whisper 74M"
+        except Exception:
+            stt_txt = "STT: Error"
+        self._safe_after(lambda: self.pill_stt.config(text=stt_txt, bg=PILL_OK_BG, fg=PILL_OK_FG))
+
+        # 3. Load Brain & warm up Ollama in background
         try:
             self.brain = Brain(mode="auto")
-            brain_desc = f"{self.brain.mode} ({'LLM' if self.brain.ollama_available else 'Rules'})"
+            if self.brain.ollama_available:
+                self.brain.model.warmup()
+                brain_txt = "Brain: Hybrid (LLM)"
+            else:
+                brain_txt = "Brain: Rules"
         except Exception:
-            brain_desc = "Error"
-
-        self._safe_after(
-            lambda: self.status_label.config(
-                text=f"Brain: {brain_desc}  |  TTS: {self.tts_mode}",
-                bg=STATUS_OK_BG,
-                fg=STATUS_OK_FG,
-            )
-        )
+            brain_txt = "Brain: Error"
+        self._safe_after(lambda: self.pill_brain.config(text=brain_txt, bg=PILL_OK_BG, fg=PILL_OK_FG))
 
     def _tts_worker(self) -> None:
         while True:
             text = self.speech_queue.get()
             if text:
-                speak_with_fallback(text, self.tts)
+                self._set_activity("Speaking reply...")
+                self.speaker.speak(text)
+                self._set_activity("Ready — type a command or press Speak")
             self.speech_queue.task_done()
 
     def _enqueue_speech(self, text: str) -> None:
@@ -335,7 +427,9 @@ class JarvisDesktopGUI:
 
     def _append_chat(self, sender: str, text: str, actions=None, meta: str = "") -> None:
         self.chat_box.config(state=tk.NORMAL)
+        now = datetime.now().strftime("%I:%M %p").lstrip("0")
         tag = "user" if sender == "You" else "jarvis"
+        self.chat_box.insert(tk.END, f"[{now}] ", "time")
         self.chat_box.insert(tk.END, f"{sender}: ", tag)
         self.chat_box.insert(tk.END, f"{text}\n")
         if actions:
@@ -363,6 +457,7 @@ class JarvisDesktopGUI:
     def _submit_text(self, text: str) -> None:
         self._append_chat("You", text)
         self.send_btn.config(state=tk.DISABLED)
+        self._set_activity("Thinking...")
         threading.Thread(target=self._process_command, args=(text,), daemon=True).start()
 
     def _process_command(self, text: str) -> None:
@@ -393,6 +488,7 @@ class JarvisDesktopGUI:
         meta = f"Intent: {intent}  •  Engine: {backend}  •  {latency_ms} ms"
         self._safe_after(lambda: self._append_chat("Jarvis", reply, actions_log, meta))
         self._safe_after(lambda: self.send_btn.config(state=tk.NORMAL))
+        self._set_activity("Ready — type a command or press Speak")
         self._enqueue_speech(reply)
 
     def _ask_confirmation_sync(self, prompt: str) -> bool:
@@ -421,6 +517,7 @@ class JarvisDesktopGUI:
                 self.audio_stream.start()
                 self.is_recording = True
                 self.mic_btn.config(text="Stop", bg=RECORD_BG, fg=RECORD_FG)
+                self._set_activity("Listening... Speak now, then click Stop.")
             except Exception as e:
                 messagebox.showerror("Microphone Error", f"Could not access microphone:\n{e}")
         else:
@@ -433,6 +530,7 @@ class JarvisDesktopGUI:
                 pass
 
             if not self.recorded_frames:
+                self._set_activity("Ready — type a command or press Speak")
                 return
 
             audio = np.concatenate(self.recorded_frames, axis=0).flatten()
@@ -441,6 +539,7 @@ class JarvisDesktopGUI:
                 audio = audio / max_val * 0.95
 
             self.mic_btn.config(state=tk.DISABLED)
+            self._set_activity("Transcribing speech...")
             threading.Thread(target=self._process_voice, args=(audio,), daemon=True).start()
 
     def _process_voice(self, audio: np.ndarray) -> None:
@@ -454,14 +553,17 @@ class JarvisDesktopGUI:
         except Exception as e:
             self._safe_after(lambda: self._append_chat("Jarvis", f"STT error: {e}"))
             self._safe_after(lambda: self.mic_btn.config(state=tk.NORMAL))
+            self._set_activity("Ready — type a command or press Speak")
             return
 
         self._safe_after(lambda: self.mic_btn.config(state=tk.NORMAL))
         if not recognized:
             self._safe_after(lambda: self._append_chat("Jarvis", "I didn't hear anything. Please try again."))
+            self._set_activity("Ready — type a command or press Speak")
             return
 
         self._safe_after(lambda: self._append_chat("You", recognized))
+        self._set_activity("Thinking...")
         threading.Thread(target=self._process_command, args=(recognized,), daemon=True).start()
 
 

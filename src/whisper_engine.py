@@ -183,7 +183,7 @@ class LocalWhisperEngine:
         audio_input: Union[str, Path, np.ndarray],
         language: Optional[str] = "en",
         initial_prompt: Optional[str] = DEFAULT_PROMPT_BIAS,
-        beam_size: int = 5,
+        beam_size: int = 2,
         temperature: float = 0.0,
     ) -> Dict[str, Any]:
         """
@@ -210,7 +210,8 @@ class LocalWhisperEngine:
             language=language,
             initial_prompt=initial_prompt,
             beam_size=beam_size,
-            temperature=temperature
+            temperature=temperature,
+            condition_on_previous_text=False,
         )
 
         collected_text = []
