@@ -40,12 +40,17 @@ class Action(str, Enum):
     VOLUME = "volume"          # value = up | down | mute | unmute
     SYSTEM = "system"          # value = shutdown | restart | sleep | lock
     BROWSER = "browser"        # value = new_tab | close_tab | refresh | back | forward | scroll_down | ...
-    TYPE_TEXT = "type_text"    # query = text to type
+    TYPE_TEXT = "type_text"    # query = text to type, value = optional "replace" | "enter"
+    HOTKEY = "hotkey"          # value = shortcut e.g. "ctrl+a", "ctrl+c", "ctrl+v", "ctrl+s", "enter"
+    FOCUS_WINDOW = "focus_window"  # target = app or window title
+    WAIT = "wait"              # target = app/window name or value = seconds
+    CLICK_ELEMENT = "click_element"  # query = UI element description, value = click|double_click|right_click
+    VERIFY_SCREEN = "verify_screen"  # query = expected screen state to verify
     SPEAK = "speak"            # value = text for TTS
     GET_TIME = "get_time"      # code looks up the current time
     GET_DATE = "get_date"      # code looks up today's date
     SEE_SCREEN = "see_screen"  # local vision model inspects the current screen
-    MOUSE = "mouse"            # value = click | double_click | right_click | move
+    MOUSE = "mouse"            # value = click | double_click | right_click | move | drag | scroll_up | scroll_down
     RUN_TERMINAL = "run_terminal"  # query = shell command (requires permission)
     FILE_OP = "file_op"        # value = list | read | mkdir | write | search
     MEMORY_OP = "memory_op"    # value = remember | forget | list
@@ -83,4 +88,8 @@ def enforce_safety(plan: Plan) -> Plan:
             plan.needs_confirmation = True
         elif step.action == Action.RUN_TERMINAL:
             plan.needs_confirmation = True
+        elif step.action == Action.HOTKEY and (step.value or "").lower().replace(" ", "") in {"alt+f4", "ctrl+w"}:
+            # Closing windows/tabs via hotkey is safe only if user asked; keep alt+f4 confirmed
+            if (step.value or "").lower().replace(" ", "") == "alt+f4":
+                plan.needs_confirmation = True
     return plan

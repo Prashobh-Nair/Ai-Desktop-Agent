@@ -150,23 +150,46 @@ class LocalScreenVision:
             img = img.resize((max_width, max(1, int(img.height * ratio))), Image.Resampling.LANCZOS)
         return img
 
-    def _analyze_with_gemini(self, img: Image.Image, prompt_text: str) -> Optional[str]:
+    def get_screen_size(self) -> tuple[int, int]:
+        """Returns physical primary screen (width, height) in pixels."""
+        if os.name == "nt":
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                try:
+                    user32.SetProcessDPIAware()
+                except Exception:
+                    pass
+                w = int(user32.GetSystemMetrics(0))
+                h = int(user32.GetSystemMetrics(1))
+                if w > 0 and h > 0:
+                    return w, h
+            except Exception:
+                pass
+        img = self.capture_screen(max_width=1920)
+        return img.width, img.height
+
+    def _call_gemini_vision(self, img: Image.Image, prompt_text: str, json_mode: bool = False, max_tokens: int = 250) -> Optional[str]:
         api_key = _load_gemini_key()
         if not api_key or api_key == "your_gemini_api_key_here":
             return None
 
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=75)
+        img.save(buf, format="JPEG", quality=80)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        gen_cfg: dict = {"temperature": 0.1 if json_mode else 0.2, "maxOutputTokens": max_tokens}
+        if json_mode:
+            gen_cfg["responseMimeType"] = "application/json"
+
         body = json.dumps({
             "contents": [{
                 "role": "user",
                 "parts": [
-                    {"text": f"{prompt_text} Answer concisely in 1 to 3 sentences."},
+                    {"text": prompt_text},
                     {"inlineData": {"mimeType": "image/jpeg", "data": b64}},
                 ],
             }],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 250},
+            "generationConfig": gen_cfg,
         }).encode("utf-8")
 
         for model_id in ("gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-flash-lite-latest", "gemini-flash-latest"):
@@ -183,6 +206,87 @@ class LocalScreenVision:
             except Exception:
                 return None
         return None
+
+    def _analyze_with_gemini(self, img: Image.Image, prompt_text: str) -> Optional[str]:
+        return self._call_gemini_vision(
+            img,
+            f"{prompt_text} Answer concisely in 1 to 3 sentences.",
+            json_mode=False,
+            max_tokens=250,
+        )
+
+    def locate_element(self, element_description: str) -> dict:
+        """
+        Captures a fresh screenshot and locates a UI element (button, text field, menu, etc.).
+        Returns {"found": bool, "x": int, "y": int, "element_type": str, "label": str, "reason": str}.
+        """
+        try:
+            screen_w, screen_h = self.get_screen_size()
+            img = self.capture_screen(max_width=1280)
+        except Exception as e:
+            return {"found": False, "x": 0, "y": 0, "element_type": "", "label": "", "reason": str(e)}
+
+        prompt = (
+            f"Find this UI element on the screen: '{element_description}'.\n"
+            "Return ONLY valid JSON with:\n"
+            '{"found": true/false, "x_norm": 0-1000, "y_norm": 0-1000, '
+            '"element_type": "button|input|menu|window|link|other", "label": "short label", "reason": "brief note"}\n'
+            "Use normalized coordinates where (0,0) is top-left and (1000,1000) is bottom-right of the image. "
+            "Aim for the exact center of the interactive element."
+        )
+        raw = self._call_gemini_vision(img, prompt, json_mode=True, max_tokens=180)
+        if not raw:
+            return {"found": False, "x": 0, "y": 0, "element_type": "", "label": "", "reason": "Vision API unavailable"}
+        try:
+            data = json.loads(raw)
+            if not data.get("found"):
+                return {
+                    "found": False,
+                    "x": 0,
+                    "y": 0,
+                    "element_type": data.get("element_type", ""),
+                    "label": data.get("label", ""),
+                    "reason": data.get("reason", "Element not visible on screen."),
+                }
+            x_norm = max(0, min(1000, int(data.get("x_norm", 0))))
+            y_norm = max(0, min(1000, int(data.get("y_norm", 0))))
+            return {
+                "found": True,
+                "x": int(round(x_norm * screen_w / 1000.0)),
+                "y": int(round(y_norm * screen_h / 1000.0)),
+                "element_type": str(data.get("element_type", "other")),
+                "label": str(data.get("label", element_description)),
+                "reason": str(data.get("reason", "")),
+            }
+        except Exception as e:
+            return {"found": False, "x": 0, "y": 0, "element_type": "", "label": "", "reason": f"Parse error: {e}"}
+
+    def verify_screen(self, expected_description: str) -> tuple[bool, str]:
+        """
+        Captures a fresh screenshot after an action and verifies whether the expected state is visible.
+        Uses Gemini Vision primary with local SmolVLM-256M fallback.
+        """
+        try:
+            img = self.capture_screen(max_width=960)
+        except Exception as e:
+            return False, f"Screen capture failed during verification: {e}"
+
+        prompt = (
+            f"Verify if the current screen satisfies this expectation: '{expected_description}'.\n"
+            'Return ONLY valid JSON: {"verified": true/false, "summary": "1 concise sentence describing what is visible"}'
+        )
+        raw = self._call_gemini_vision(img, prompt, json_mode=True, max_tokens=150)
+        if raw:
+            try:
+                data = json.loads(raw)
+                return bool(data.get("verified")), str(data.get("summary") or expected_description).strip()
+            except Exception:
+                pass
+
+        # Local SmolVLM fallback when offline
+        ans = self.analyze_image(img, f"Does the screen show: {expected_description}? Answer yes or no and explain briefly.")
+        verified = ans.lower().startswith(("yes", "true", "it does", "the screen shows"))
+        return verified, ans
 
     def analyze_image(self, img: Image.Image, question: Optional[str] = None) -> str:
         """Analyzes a PIL Image via Gemini Vision (when online) with SmolVLM-256M local fallback."""

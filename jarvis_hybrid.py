@@ -250,6 +250,23 @@ def main() -> None:
 
             steps = plan.get("steps") or []
             if steps:
+                if plan.get("needs_confirmation"):
+                    confirm_q = plan.get("clarification_question") or f"{reply} Please say yes to confirm."
+                    print(f">>> JARVIS : \"{confirm_q}\"")
+                    speak_reply(confirm_q, fallback_tts)
+                    if args.text:
+                        ans = input("Confirm (yes/no) > ").strip().lower()
+                    else:
+                        print("[MIC ON] Waiting for confirmation...", flush=True)
+                        c_audio = listen_utterance(threshold, silence_timeout=1.0, max_seconds=6.0)
+                        print("[MIC OFF]", flush=True)
+                        ans = stt.transcribe_with_metadata(c_audio)["text"].lower() if c_audio is not None and len(c_audio) >= 1600 else ""
+                    if not any(w in ans for w in ("yes", "yeah", "confirm", "sure", "ok", "okay", "do it", "proceed")):
+                        reply = "Cancelled."
+                        print(f">>> JARVIS : \"{reply}\"")
+                        speak_reply(reply, fallback_tts)
+                        continue
+
                 outputs = executor.execute_plan(plan, memory=brain.memory, vision=vision)
                 if outputs:
                     reply = " ".join(o for o in outputs if o)

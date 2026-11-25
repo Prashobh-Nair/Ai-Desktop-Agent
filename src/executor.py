@@ -33,14 +33,22 @@ from src.tools import calendar_op, file_op, git_op, web_fetch
 VK_CONTROL = 0x11
 VK_SHIFT = 0x10
 VK_MENU = 0x12  # Alt
-VK_RETURN = 0x0D
+VK_LWIN = 0x5B
+VK_BACK = 0x08
 VK_TAB = 0x09
+VK_RETURN = 0x0D
+VK_ESCAPE = 0x1B
+VK_SPACE = 0x20
 VK_PRIOR = 0x21  # Page Up
 VK_NEXT = 0x22   # Page Down
 VK_END = 0x23
 VK_HOME = 0x24
 VK_LEFT = 0x25
+VK_UP = 0x26
 VK_RIGHT = 0x27
+VK_DOWN = 0x28
+VK_DELETE = 0x2E
+VK_F1 = 0x70
 VK_F5 = 0x74
 VK_F11 = 0x7A
 VK_OEM_PLUS = 0xBB
@@ -56,7 +64,16 @@ VK_MEDIA_PLAY_PAUSE = 0xB3
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 INPUT_KEYBOARD = 1
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_WHEEL = 0x0800
+
+try:
+    ctypes.windll.user32.SetProcessDPIAware()
+except Exception:
+    pass
 
 
 class _KEYBDINPUT(ctypes.Structure):
@@ -126,11 +143,31 @@ def _focus_browser_window() -> bool:
     return False
 
 
-def _type_unicode(text: str) -> None:
-    """Types arbitrary Unicode text into the active window using SendInput."""
+def _type_unicode(text: str, replace: bool = False, press_enter: bool = False) -> None:
+    """Types arbitrary Unicode text (with newline/tab support) into the active window."""
+    if replace:
+        _press_keys(VK_CONTROL, ord("A"))
+        time.sleep(0.04)
+        _press_keys(VK_BACK)
+        time.sleep(0.04)
+
+    # For longer text, clipboard paste is much faster and avoids dropped characters
+    if len(text) > 120 and _set_clipboard(text):
+        _press_keys(VK_CONTROL, ord("V"))
+        time.sleep(0.08)
+        if press_enter:
+            _press_keys(VK_RETURN)
+        return
+
     user32 = ctypes.windll.user32
     extra = ctypes.c_ulong(0)
     for ch in text:
+        if ch == "\n":
+            _press_keys(VK_RETURN)
+            continue
+        if ch == "\t":
+            _press_keys(VK_TAB)
+            continue
         code = ord(ch)
         for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
             inp = _INPUT(
@@ -146,7 +183,174 @@ def _type_unicode(text: str) -> None:
                 ),
             )
             user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
-        time.sleep(0.005)
+        time.sleep(0.004)
+    if press_enter:
+        _press_keys(VK_RETURN)
+
+
+def _set_clipboard(text: str) -> bool:
+    """Copies Unicode text to the Windows clipboard via ctypes (64-bit safe, no pyperclip needed)."""
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        CF_UNICODETEXT = 13
+        GMEM_MOVEABLE = 0x0002
+
+        kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+        kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalUnlock.restype = ctypes.c_bool
+        kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalFree.restype = ctypes.c_void_p
+        user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+        user32.OpenClipboard.restype = ctypes.c_bool
+        user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+        user32.SetClipboardData.restype = ctypes.c_void_p
+
+        data = (text + "\0").encode("utf-16-le")
+        if not user32.OpenClipboard(None):
+            return False
+        try:
+            user32.EmptyClipboard()
+            h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            if not h_mem:
+                return False
+            ptr = kernel32.GlobalLock(h_mem)
+            if not ptr:
+                kernel32.GlobalFree(h_mem)
+                return False
+            ctypes.memmove(ptr, data, len(data))
+            kernel32.GlobalUnlock(h_mem)
+            if not user32.SetClipboardData(CF_UNICODETEXT, h_mem):
+                kernel32.GlobalFree(h_mem)
+                return False
+            return True
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        return False
+
+
+_KEY_NAME_MAP: Dict[str, int] = {
+    "ctrl": VK_CONTROL,
+    "control": VK_CONTROL,
+    "shift": VK_SHIFT,
+    "alt": VK_MENU,
+    "win": VK_LWIN,
+    "windows": VK_LWIN,
+    "enter": VK_RETURN,
+    "return": VK_RETURN,
+    "tab": VK_TAB,
+    "backspace": VK_BACK,
+    "back": VK_BACK,
+    "del": VK_DELETE,
+    "delete": VK_DELETE,
+    "esc": VK_ESCAPE,
+    "escape": VK_ESCAPE,
+    "space": VK_SPACE,
+    "up": VK_UP,
+    "down": VK_DOWN,
+    "left": VK_LEFT,
+    "right": VK_RIGHT,
+    "home": VK_HOME,
+    "end": VK_END,
+    "pgup": VK_PRIOR,
+    "pageup": VK_PRIOR,
+    "pgdn": VK_NEXT,
+    "pagedown": VK_NEXT,
+    "plus": VK_OEM_PLUS,
+    "minus": VK_OEM_MINUS,
+}
+for _i in range(1, 13):
+    _KEY_NAME_MAP[f"f{_i}"] = VK_F1 + (_i - 1)
+
+
+def _press_hotkey(combo: str) -> bool:
+    """Parses and presses a shortcut like 'ctrl+a', 'ctrl+shift+s', 'enter', 'alt+tab'."""
+    parts = [p.strip().lower() for p in (combo or "").split("+") if p.strip()]
+    if not parts:
+        return False
+    vkeys: List[int] = []
+    for part in parts:
+        if part in _KEY_NAME_MAP:
+            vkeys.append(_KEY_NAME_MAP[part])
+        elif len(part) == 1 and part.isalnum():
+            vkeys.append(ord(part.upper()))
+        else:
+            return False
+    _press_keys(*vkeys)
+    return True
+
+
+WINDOW_TITLE_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "notepad": ("notepad", "untitled"),
+    "word": ("word", "document", "winword"),
+    "excel": ("excel",),
+    "powerpoint": ("powerpoint",),
+    "vscode": ("visual studio code", "code"),
+    "chrome": ("google chrome", "chrome"),
+    "edge": ("microsoft edge", "edge"),
+    "file explorer": ("file explorer", "explorer"),
+    "terminal": ("windows powershell", "powershell", "command prompt", "terminal"),
+    "paint": ("paint",),
+    "calculator": ("calculator",),
+}
+
+
+def _find_window(target: str) -> Optional[Tuple[int, str]]:
+    """Finds the first visible top-level window matching target or its aliases."""
+    user32 = ctypes.windll.user32
+    t = (target or "").strip().lower()
+    if not t:
+        return None
+    keywords = WINDOW_TITLE_ALIASES.get(t, (t,))
+    result: Optional[Tuple[int, str]] = None
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def enum_cb(hwnd, _lparam):
+        nonlocal result
+        if result is not None:
+            return False
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title_lower = buf.value.lower()
+                if any(k in title_lower for k in keywords):
+                    result = (int(hwnd), buf.value)
+                    return False
+        return True
+
+    user32.EnumWindows(enum_cb, 0)
+    return result
+
+
+def _bring_hwnd_to_front(hwnd: int) -> bool:
+    """Restores and brings a window handle to the foreground reliably."""
+    user32 = ctypes.windll.user32
+    SW_RESTORE = 9
+    try:
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, SW_RESTORE)
+        fg_hwnd = user32.GetForegroundWindow()
+        fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+        cur_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+        attached = False
+        if fg_tid and fg_tid != cur_tid:
+            attached = bool(user32.AttachThreadInput(cur_tid, fg_tid, True))
+        try:
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(cur_tid, fg_tid, False)
+        time.sleep(0.15)
+        return True
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +382,7 @@ DESKTOP_LAUNCH: Dict[str, str] = {
     "calculator": "calc",
     "vscode": "code",
     "file explorer": "explorer",
-    "word": "winword",
+    "word": "winword /w",
     "excel": "excel",
     "powerpoint": "powerpnt",
     "paint": "mspaint",
@@ -390,30 +594,110 @@ class ActionExecutor:
             return "Restarting in 5 seconds."
         return f"Unknown system command: {v}."
 
+    def focus_window(self, target: str) -> str:
+        """Finds a running window matching target and brings it to foreground."""
+        found = _find_window(target)
+        if not found:
+            return f"Window '{target}' not found."
+        hwnd, title = found
+        if _bring_hwnd_to_front(hwnd):
+            return f"Focused window: {title}."
+        return f"Found '{title}' but could not focus it."
+
+    def wait_for_window(self, target: str, timeout: float = 6.0) -> bool:
+        """Waits until a window matching target appears, then focuses it."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            found = _find_window(target)
+            if found:
+                _bring_hwnd_to_front(found[0])
+                time.sleep(0.25)
+                return True
+            time.sleep(0.2)
+        return False
+
+    def click_element(self, description: str, click_type: str = "click", vision=None) -> str:
+        """Uses Vision to locate a UI element on screen and clicks it (with 1 retry)."""
+        if vision is None:
+            return "Vision engine is not attached; cannot locate UI element."
+        if not description:
+            return "No UI element description provided."
+
+        loc = vision.locate_element(description)
+        if not loc.get("found"):
+            time.sleep(0.5)
+            loc = vision.locate_element(description)
+        if not loc.get("found"):
+            return f"Could not find '{description}' on screen ({loc.get('reason', 'not visible')})."
+
+        x, y = int(loc["x"]), int(loc["y"])
+        act = (click_type or "click").strip().lower()
+        if act not in ("click", "left_click", "double_click", "right_click"):
+            act = "click"
+        self.control_mouse(act, f"{x},{y}")
+        label = loc.get("label") or description
+        return f"Clicked '{label}' at ({x}, {y})."
+
     def control_mouse(self, value: str, target: str = "") -> str:
         user32 = ctypes.windll.user32
         v = (value or "click").strip().lower()
-        if v == "move" and "," in (target or ""):
+
+        if v == "scroll_up":
+            amt = int(target) if (target or "").strip().isdigit() else 480
+            _scroll_wheel(abs(amt))
+            return "Scrolled up."
+        if v == "scroll_down":
+            amt = int(target) if (target or "").strip().isdigit() else 480
+            _scroll_wheel(-abs(amt))
+            return "Scrolled down."
+
+        if v == "drag" and "->" in (target or ""):
+            try:
+                p1, p2 = target.split("->", 1)
+                x1, y1 = [int(p.strip()) for p in p1.split(",", 1)]
+                x2, y2 = [int(p.strip()) for p in p2.split(",", 1)]
+                user32.SetCursorPos(x1, y1)
+                time.sleep(0.04)
+                user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                steps = 12
+                for i in range(1, steps + 1):
+                    ix = int(x1 + (x2 - x1) * i / steps)
+                    iy = int(y1 + (y2 - y1) * i / steps)
+                    user32.SetCursorPos(ix, iy)
+                    time.sleep(0.015)
+                user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                return f"Dragged from ({x1}, {y1}) to ({x2}, {y2})."
+            except ValueError:
+                return f"Invalid drag coordinates: {target}"
+
+        # Optional "x,y" target moves cursor before clicking
+        moved_msg = ""
+        if "," in (target or ""):
             try:
                 x, y = [int(p.strip()) for p in target.split(",", 1)]
                 user32.SetCursorPos(x, y)
-                return f"Moved mouse to ({x}, {y})."
+                time.sleep(0.04)
+                moved_msg = f" at ({x}, {y})"
+                if v == "move":
+                    return f"Moved mouse to ({x}, {y})."
             except ValueError:
-                return f"Invalid coordinates: {target}"
+                if v == "move":
+                    return f"Invalid coordinates: {target}"
+
         if v in ("click", "left_click"):
-            user32.mouse_event(0x0002, 0, 0, 0, 0)
-            user32.mouse_event(0x0004, 0, 0, 0, 0)
-            return "Clicked mouse."
+            user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            return f"Clicked mouse{moved_msg}."
         if v == "double_click":
             for _ in range(2):
-                user32.mouse_event(0x0002, 0, 0, 0, 0)
-                user32.mouse_event(0x0004, 0, 0, 0, 0)
+                user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                 time.sleep(0.05)
-            return "Double-clicked mouse."
+            return f"Double-clicked mouse{moved_msg}."
         if v == "right_click":
-            user32.mouse_event(0x0008, 0, 0, 0, 0)
-            user32.mouse_event(0x0010, 0, 0, 0, 0)
-            return "Right-clicked mouse."
+            user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+            user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+            return f"Right-clicked mouse{moved_msg}."
         return f"Unknown mouse action: {v}"
 
     def run_terminal(self, command: str) -> str:
@@ -440,6 +724,8 @@ class ActionExecutor:
         has_search = "search" in actions
 
         pending_query: Optional[str] = None
+        last_opened_app: Optional[str] = None
+        last_typed_step: Optional[Dict] = None
         total = len(steps)
         for idx, step in enumerate(steps):
             action = step.get("action")
@@ -452,19 +738,59 @@ class ActionExecutor:
                 if (has_search or has_play) and target.lower() in WEB_APPS:
                     continue
                 logs.append(self.open_app(target))
+                last_opened_app = target
+                # If followed by interactive steps, wait for window & focus it automatically
                 if idx + 1 < total:
-                    time.sleep(0.8)
+                    next_act = steps[idx + 1].get("action")
+                    if next_act in ("type_text", "hotkey", "click_element", "mouse"):
+                        self.wait_for_window(target, timeout=6.0)
+                    elif next_act not in ("wait", "focus_window"):
+                        time.sleep(0.8)
+            elif action == "focus_window":
+                logs.append(self.focus_window(target or last_opened_app or ""))
+            elif action == "wait":
+                if target:
+                    ok = self.wait_for_window(target, timeout=6.0)
+                    logs.append(f"{target} is ready." if ok else f"Waited for {target}.")
+                else:
+                    try:
+                        secs = max(0.1, min(10.0, float(value or "1.0")))
+                    except ValueError:
+                        secs = 1.0
+                    time.sleep(secs)
+                    logs.append(f"Waited {secs:.1f}s.")
             elif action == "close_app":
                 logs.append(self.close_app(target))
             elif action == "open_url":
                 logs.append(self.open_url(value))
                 if idx + 1 < total:
-                    time.sleep(0.6)
+                    time.sleep(0.8)
             elif action == "see_screen":
                 if vision is not None:
                     logs.append(vision.analyze_screen(query or "What is on my screen?"))
                 else:
                     logs.append("Vision engine is not attached.")
+            elif action == "click_element":
+                logs.append(self.click_element(query or target, value or "click", vision=vision))
+                if idx + 1 < total:
+                    time.sleep(0.2)
+            elif action == "verify_screen":
+                if vision is not None and query:
+                    ok, summary = vision.verify_screen(query)
+                    # Retry once if verification failed right after typing
+                    if not ok and last_typed_step is not None:
+                        if last_opened_app:
+                            self.focus_window(last_opened_app)
+                        _type_unicode(
+                            last_typed_step.get("query") or "",
+                            replace=(last_typed_step.get("value") or "").lower() == "replace",
+                            press_enter=(last_typed_step.get("value") or "").lower() == "enter",
+                        )
+                        time.sleep(0.4)
+                        ok, summary = vision.verify_screen(query)
+                    logs.append(f"Verified: {summary}" if ok else f"Screen check: {summary}")
+                else:
+                    logs.append("Verification skipped (vision unavailable).")
             elif action == "get_time":
                 from datetime import datetime
                 logs.append("It's " + datetime.now().strftime("%I:%M %p").lstrip("0") + ".")
@@ -492,9 +818,22 @@ class ActionExecutor:
                 logs.append("Went to previous track.")
             elif action == "volume":
                 logs.append(self.control_volume(value))
+            elif action == "hotkey":
+                combo = value or query or target
+                if _press_hotkey(combo):
+                    logs.append(f"Pressed {combo}.")
+                    time.sleep(0.12)
+                else:
+                    logs.append(f"Unknown shortcut: {combo}.")
             elif action == "type_text":
-                _type_unicode(query)
-                logs.append(f"Typed text: '{query}'.")
+                v_low = (value or "").strip().lower()
+                _type_unicode(
+                    query,
+                    replace=(v_low == "replace"),
+                    press_enter=(v_low == "enter"),
+                )
+                last_typed_step = step
+                logs.append(f"Typed: '{query}'.")
             elif action == "system":
                 logs.append(self.control_system(value))
             elif action == "mouse":
