@@ -71,13 +71,50 @@ class LocalScreenVision:
         LocalScreenVision._model = model
 
     def capture_screen(self, max_width: int = 960) -> Image.Image:
-        """Captures the primary screen and resizes proportionally."""
+        """Captures the primary screen with ImageGrab and Windows GDI BitBlt fallback."""
+        img = None
+        last_err: Optional[Exception] = None
         try:
             img = ImageGrab.grab(all_screens=False).convert("RGB")
-        except OSError as e:
+        except Exception as e:
+            last_err = e
+
+        if img is None and os.name == "nt":
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                gdi32 = ctypes.windll.gdi32
+                w = user32.GetSystemMetrics(0)
+                h = user32.GetSystemMetrics(1)
+                hwnd = user32.GetDesktopWindow()
+                hdc_src = user32.GetWindowDC(hwnd)
+                hdc_mem = gdi32.CreateCompatibleDC(hdc_src)
+                hbmp = gdi32.CreateCompatibleBitmap(hdc_src, w, h)
+                gdi32.SelectObject(hdc_mem, hbmp)
+                gdi32.BitBlt(hdc_mem, 0, 0, w, h, hdc_src, 0, 0, 0x00CC0020)
+                class _BMI(ctypes.Structure):
+                    _fields_ = [
+                        ("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
+                        ("biHeight", ctypes.c_int32), ("biPlanes", ctypes.c_uint16),
+                        ("biBitCount", ctypes.c_uint16), ("biCompression", ctypes.c_uint32),
+                        ("biSizeImage", ctypes.c_uint32), ("biXPelsPerMeter", ctypes.c_int32),
+                        ("biYPelsPerMeter", ctypes.c_int32), ("biClrUsed", ctypes.c_uint32),
+                        ("biClrImportant", ctypes.c_uint32),
+                    ]
+                bmi = _BMI(40, w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+                buf = ctypes.create_string_buffer(w * h * 4)
+                gdi32.GetDIBits(hdc_mem, hbmp, 0, h, buf, ctypes.byref(bmi), 0)
+                gdi32.DeleteObject(hbmp)
+                gdi32.DeleteDC(hdc_mem)
+                user32.ReleaseDC(hwnd, hdc_src)
+                img = Image.frombuffer("RGB", (w, h), buf, "raw", "BGRX", 0, 1)
+            except Exception as e2:
+                last_err = e2
+
+        if img is None:
             raise RuntimeError(
-                f"Screen capture unavailable (desktop may be locked or headless): {e}"
-            ) from e
+                f"Screen capture unavailable (desktop may be locked or headless): {last_err}"
+            )
         if img.width > max_width:
             ratio = max_width / float(img.width)
             img = img.resize((max_width, max(1, int(img.height * ratio))), Image.Resampling.LANCZOS)

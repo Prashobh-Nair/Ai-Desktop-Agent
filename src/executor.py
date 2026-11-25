@@ -428,8 +428,8 @@ class ActionExecutor:
         except Exception as e:
             return f"Terminal command failed: {e}"
 
-    def execute_plan(self, plan: Dict, memory=None) -> List[str]:
-        """Executes all steps in a Brain Plan dictionary and returns status logs."""
+    def execute_plan(self, plan: Dict, memory=None, vision=None) -> List[str]:
+        """Executes all steps in a Brain Plan dictionary in order and returns status logs."""
         steps = plan.get("steps") or []
         if not steps:
             return []
@@ -440,7 +440,8 @@ class ActionExecutor:
         has_search = "search" in actions
 
         pending_query: Optional[str] = None
-        for step in steps:
+        total = len(steps)
+        for idx, step in enumerate(steps):
             action = step.get("action")
             target = step.get("target") or ""
             query = step.get("query") or ""
@@ -451,10 +452,25 @@ class ActionExecutor:
                 if (has_search or has_play) and target.lower() in WEB_APPS:
                     continue
                 logs.append(self.open_app(target))
+                if idx + 1 < total:
+                    time.sleep(0.8)
             elif action == "close_app":
                 logs.append(self.close_app(target))
             elif action == "open_url":
                 logs.append(self.open_url(value))
+                if idx + 1 < total:
+                    time.sleep(0.6)
+            elif action == "see_screen":
+                if vision is not None:
+                    logs.append(vision.analyze_screen(query or "What is on my screen?"))
+                else:
+                    logs.append("Vision engine is not attached.")
+            elif action == "get_time":
+                from datetime import datetime
+                logs.append("It's " + datetime.now().strftime("%I:%M %p").lstrip("0") + ".")
+            elif action == "get_date":
+                from datetime import datetime
+                logs.append("Today is " + datetime.now().strftime("%A, %d %B %Y") + ".")
             elif action == "search":
                 if has_play:
                     pending_query = query

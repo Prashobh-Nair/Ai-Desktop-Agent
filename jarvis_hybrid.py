@@ -249,15 +249,7 @@ def main() -> None:
 
             steps = plan.get("steps") or []
             if steps:
-                see_steps = [s for s in steps if s.get("action") == "see_screen"]
-                other_steps = [s for s in steps if s.get("action") != "see_screen"]
-                outputs = []
-                for s in see_steps:
-                    outputs.append(vision.analyze_screen(s.get("query") or recognized_text))
-                if other_steps:
-                    sub_plan = dict(plan)
-                    sub_plan["steps"] = other_steps
-                    outputs.extend(executor.execute_plan(sub_plan, memory=brain.memory))
+                outputs = executor.execute_plan(plan, memory=brain.memory, vision=vision)
                 if outputs:
                     reply = " ".join(o for o in outputs if o)
 
