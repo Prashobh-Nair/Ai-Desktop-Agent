@@ -172,9 +172,9 @@ def main() -> None:
 
     brain = Brain(mode="auto")
     vision = LocalScreenVision()
-    executor = ActionExecutor(vision_engine=vision, memory_manager=brain.memory)
+    executor = ActionExecutor()
     bg_manager = BackgroundTaskManager()
-    goal_runner = AutonomousGoalRunner(brain, executor, confirm_callback=lambda q: True)
+    goal_runner = AutonomousGoalRunner(brain, executor, vision=vision)
     stt = SpeechRecognizer(model_size="small.en")
     fallback_tts = _init_fallback_tts()
 
@@ -243,10 +243,19 @@ def main() -> None:
             plan = plan_res["plan"]
             reply = plan.get("reply") or "Okay."
 
-            if plan.get("steps"):
-                exec_out = executor.execute_plan(plan)
-                if exec_out:
-                    reply = exec_out
+            steps = plan.get("steps") or []
+            if steps:
+                see_steps = [s for s in steps if s.get("action") == "see_screen"]
+                other_steps = [s for s in steps if s.get("action") != "see_screen"]
+                outputs = []
+                for s in see_steps:
+                    outputs.append(vision.analyze_screen(s.get("query") or recognized_text))
+                if other_steps:
+                    sub_plan = dict(plan)
+                    sub_plan["steps"] = other_steps
+                    outputs.extend(executor.execute_plan(sub_plan, memory=brain.memory))
+                if outputs:
+                    reply = " ".join(o for o in outputs if o)
 
             print(f">>> JARVIS : \"{reply}\" [{plan_res['backend']}]")
             speak_reply(reply, fallback_tts)
