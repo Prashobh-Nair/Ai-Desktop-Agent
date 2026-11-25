@@ -89,6 +89,39 @@ def _scroll_wheel(delta: int) -> None:
     ctypes.windll.user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
 
 
+def _focus_browser_window() -> bool:
+    """Finds an open browser window (Chrome/Edge/Brave/Firefox) and brings it to focus."""
+    user32 = ctypes.windll.user32
+    found_hwnd = None
+    browser_keywords = ("google chrome", "microsoft edge", "mozilla firefox", "brave", "opera")
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def enum_cb(hwnd, _lparam):
+        nonlocal found_hwnd
+        if found_hwnd is not None:
+            return False
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value.lower()
+                if any(k in title for k in browser_keywords):
+                    found_hwnd = hwnd
+                    return False
+        return True
+
+    user32.EnumWindows(enum_cb, 0)
+    if found_hwnd:
+        SW_RESTORE = 9
+        if user32.IsIconic(found_hwnd):
+            user32.ShowWindow(found_hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(found_hwnd)
+        time.sleep(0.12)
+        return True
+    return False
+
+
 def _type_unicode(text: str) -> None:
     """Types arbitrary Unicode text into the active window using SendInput."""
     user32 = ctypes.windll.user32
@@ -293,6 +326,7 @@ class ActionExecutor:
 
     def control_browser(self, command: str) -> str:
         cmd = (command or "").strip().lower()
+        _focus_browser_window()
         if cmd == "scroll_down":
             _scroll_wheel(-480)
             return "Scrolled down."
