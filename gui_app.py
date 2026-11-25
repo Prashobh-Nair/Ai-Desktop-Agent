@@ -38,6 +38,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from brain_module.jarvis.brain import Brain
 from src.executor import ActionExecutor
+from src.gemini_stt import GeminiSTTEngine
 
 # Enable crisp DPI scaling on Windows
 try:
@@ -143,6 +144,7 @@ class JarvisDesktopGUI:
 
         self.brain: Optional[Brain] = None
         self.executor = ActionExecutor()
+        self.gemini_stt = GeminiSTTEngine()
         self.stt = None
         self.speaker = FastSpeaker()
 
@@ -390,14 +392,17 @@ class JarvisDesktopGUI:
             tts_txt = "TTS: SAPI5 Fast"
         self._safe_after(lambda: self.pill_tts.config(text=tts_txt, bg=PILL_OK_BG, fg=PILL_OK_FG))
 
-        # 2. Preload STT (Whisper 74M) so first voice turn has zero load delay
-        try:
-            from inference import SpeechRecognizer
-            self.stt = SpeechRecognizer(engine="whisper", model_size="base")
-            self.stt.whisper_engine.initialize()
-            stt_txt = "STT: Whisper 74M"
-        except Exception:
-            stt_txt = "STT: Error"
+        # 2. Configure STT (Gemini Audio STT for human-level accuracy + Whisper 74M offline fallback)
+        if self.gemini_stt.is_configured:
+            stt_txt = "STT: Gemini Audio"
+        else:
+            try:
+                from inference import SpeechRecognizer
+                self.stt = SpeechRecognizer(engine="whisper", model_size="base")
+                self.stt.whisper_engine.initialize()
+                stt_txt = "STT: Whisper 74M"
+            except Exception:
+                stt_txt = "STT: Error"
         self._safe_after(lambda: self.pill_stt.config(text=stt_txt, bg=PILL_OK_BG, fg=PILL_OK_FG))
 
         # 3. Load Brain (prefers Gemini 3.1 Flash Lite if configured, else Ollama)
@@ -545,13 +550,21 @@ class JarvisDesktopGUI:
             threading.Thread(target=self._process_voice, args=(audio,), daemon=True).start()
 
     def _process_voice(self, audio: np.ndarray) -> None:
+        recognized = ""
         try:
-            if self.stt is None:
-                from inference import SpeechRecognizer
-                self.stt = SpeechRecognizer(engine="whisper", model_size="base")
+            if self.gemini_stt.is_configured:
+                try:
+                    res = self.gemini_stt.transcribe_with_metadata(audio)
+                    recognized = (res.get("text") or "").strip()
+                except Exception:
+                    recognized = ""
 
-            res = self.stt.transcribe_with_metadata(audio)
-            recognized = (res.get("text") or "").strip()
+            if not recognized:
+                if self.stt is None:
+                    from inference import SpeechRecognizer
+                    self.stt = SpeechRecognizer(engine="whisper", model_size="base")
+                res = self.stt.transcribe_with_metadata(audio)
+                recognized = (res.get("text") or "").strip()
         except Exception as e:
             self._safe_after(lambda: self._append_chat("Jarvis", f"STT error: {e}"))
             self._safe_after(lambda: self.mic_btn.config(state=tk.NORMAL))
