@@ -1,10 +1,10 @@
 """
 Native Windows Desktop GUI for the AI-Powered Autonomous Desktop Agent.
 
-Simple, light-themed student GUI built with Tkinter:
-- Runs natively on Windows so OS & Browser automation work reliably.
+Simple, clean, light-themed student GUI built with Tkinter:
+- High-DPI sharp rendering on Windows.
 - Non-blocking execution: text reply appears immediately, and TTS speaks asynchronously.
-- Automatic Kokoro-82M TTS with Windows SAPI5 fallback if RAM is low.
+- Automatic Kokoro-82M TTS with Windows SAPI5 fallback if RAM is tight.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
 
+import ctypes
 import queue
 import subprocess
 import threading
@@ -36,19 +37,28 @@ if str(PROJECT_ROOT) not in sys.path:
 from brain_module.jarvis.brain import Brain
 from src.executor import ActionExecutor
 
+# Enable crisp DPI scaling on Windows
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    pass
 
-# Light, simple student-project color palette (no dark theme, no bright colors)
-BG_MAIN = "#f4f6f8"
+
+# Simple, calm, light-themed color palette (no dark theme, no bright colors)
+BG_MAIN = "#f5f6f8"
 BG_CARD = "#ffffff"
-BG_INPUT = "#fafbfc"
-BORDER_COLOR = "#d0d7de"
+BG_SUBTLE = "#f0f2f5"
+BORDER_COLOR = "#dfe3e8"
 TEXT_PRIMARY = "#24292f"
-TEXT_MUTED = "#57606a"
+TEXT_MUTED = "#656d76"
 ACCENT = "#3b5b7d"
+ACCENT_HOVER = "#2f4966"
 ACCENT_TEXT = "#ffffff"
-BTN_BG = "#eef2f6"
+BTN_HOVER = "#e4e8ee"
+STATUS_OK_BG = "#edf5ef"
+STATUS_OK_FG = "#2c663b"
 RECORD_BG = "#f6eaea"
-RECORD_FG = "#a94442"
+RECORD_FG = "#9c3b3b"
 
 
 def speak_with_fallback(text: str, tts_engine=None) -> None:
@@ -64,7 +74,6 @@ def speak_with_fallback(text: str, tts_engine=None) -> None:
         except Exception:
             pass
 
-    # Fallback: built-in Windows SAPI5 speech (fast, zero extra RAM)
     safe_text = clean.replace("'", "''")
     ps_cmd = (
         "Add-Type -AssemblyName System.Speech; "
@@ -77,12 +86,17 @@ def speak_with_fallback(text: str, tts_engine=None) -> None:
     )
 
 
+def _bind_hover(widget: tk.Widget, normal_bg: str, hover_bg: str) -> None:
+    widget.bind("<Enter>", lambda _e: widget.config(bg=hover_bg) if widget["state"] != tk.DISABLED else None)
+    widget.bind("<Leave>", lambda _e: widget.config(bg=normal_bg) if widget["state"] != tk.DISABLED else None)
+
+
 class JarvisDesktopGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("AI-Powered Autonomous Desktop Agent — Jarvis")
-        self.root.geometry("920x620")
-        self.root.minsize(760, 520)
+        self.root.geometry("820x600")
+        self.root.minsize(660, 480)
         self.root.configure(bg=BG_MAIN)
 
         self.brain: Optional[Brain] = None
@@ -101,12 +115,12 @@ class JarvisDesktopGUI:
         self._start_background_workers()
 
     def _build_ui(self) -> None:
-        # Top Header
+        # Top Header Card
         header = tk.Frame(self.root, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
-        header.pack(fill=tk.X, padx=14, pady=(12, 8))
+        header.pack(fill=tk.X, padx=18, pady=(16, 10))
 
         title_frame = tk.Frame(header, bg=BG_CARD)
-        title_frame.pack(side=tk.LEFT, padx=14, pady=10)
+        title_frame.pack(side=tk.LEFT, padx=16, pady=12)
         tk.Label(
             title_frame,
             text="AI-Powered Autonomous Desktop Agent",
@@ -116,88 +130,126 @@ class JarvisDesktopGUI:
         ).pack(anchor="w")
         tk.Label(
             title_frame,
-            text="Semester 5 Minor Project — STT + Brain + OS/Browser Automation + TTS",
+            text="Semester 5 Minor Project  •  STT, Brain, OS/Browser Automation & TTS",
             font=("Segoe UI", 9),
             bg=BG_CARD,
             fg=TEXT_MUTED,
-        ).pack(anchor="w")
+        ).pack(anchor="w", pady=(2, 0))
 
         self.status_label = tk.Label(
             header,
-            text="Status: Initializing modules...",
+            text="Initializing modules...",
             font=("Segoe UI", 9),
-            bg=BTN_BG,
+            bg=BG_SUBTLE,
             fg=TEXT_MUTED,
-            padx=10,
-            pady=4,
+            padx=12,
+            pady=5,
         )
-        self.status_label.pack(side=tk.RIGHT, padx=14)
+        self.status_label.pack(side=tk.RIGHT, padx=16)
 
-        # Body: Left Chat + Right Controls
-        body = tk.Frame(self.root, bg=BG_MAIN)
-        body.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 12))
+        # Main Chat Card
+        card = tk.Frame(self.root, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
+        card.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 8))
 
-        # Left Panel (Chat)
-        left = tk.Frame(body, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        # Toolbar inside Chat Card
+        toolbar = tk.Frame(card, bg=BG_CARD)
+        toolbar.pack(fill=tk.X, padx=16, pady=(10, 6))
 
-        chat_top = tk.Frame(left, bg=BG_CARD)
-        chat_top.pack(fill=tk.X, padx=12, pady=(8, 4))
         tk.Label(
-            chat_top, text="Assistant Console", font=("Segoe UI", 10, "bold"), bg=BG_CARD, fg=TEXT_PRIMARY
+            toolbar,
+            text="Assistant Console",
+            font=("Segoe UI", 10, "bold"),
+            bg=BG_CARD,
+            fg=TEXT_PRIMARY,
         ).pack(side=tk.LEFT)
-        tk.Button(
-            chat_top,
+
+        clear_btn = tk.Button(
+            toolbar,
             text="Clear Chat",
-            font=("Segoe UI", 8),
-            bg=BTN_BG,
+            font=("Segoe UI", 9),
+            bg=BG_SUBTLE,
             fg=TEXT_PRIMARY,
             relief=tk.FLAT,
-            padx=8,
-            pady=2,
+            cursor="hand2",
+            padx=10,
+            pady=3,
             command=self._clear_chat,
-        ).pack(side=tk.RIGHT)
+        )
+        clear_btn.pack(side=tk.RIGHT)
+        _bind_hover(clear_btn, BG_SUBTLE, BTN_HOVER)
 
+        tk.Checkbutton(
+            toolbar,
+            text="Speak replies aloud",
+            variable=self.speak_enabled,
+            font=("Segoe UI", 9),
+            bg=BG_CARD,
+            fg=TEXT_MUTED,
+            activebackground=BG_CARD,
+            cursor="hand2",
+        ).pack(side=tk.RIGHT, padx=(0, 14))
+
+        # Divider
+        tk.Frame(card, bg=BORDER_COLOR, height=1).pack(fill=tk.X)
+
+        # Chat History Area
         self.chat_box = scrolledtext.ScrolledText(
-            left,
+            card,
             wrap=tk.WORD,
             font=("Segoe UI", 10),
             bg=BG_CARD,
             fg=TEXT_PRIMARY,
             relief=tk.FLAT,
-            padx=12,
-            pady=8,
+            padx=16,
+            pady=12,
+            spacing1=2,
+            spacing3=2,
             state=tk.DISABLED,
         )
-        self.chat_box.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-        self.chat_box.tag_configure("user", foreground="#1f4e79", font=("Segoe UI", 10, "bold"))
-        self.chat_box.tag_configure("jarvis", foreground="#2e5939", font=("Segoe UI", 10, "bold"))
-        self.chat_box.tag_configure("meta", foreground=TEXT_MUTED, font=("Segoe UI", 8))
-        self.chat_box.tag_configure("action", foreground=ACCENT, font=("Segoe UI", 9))
+        self.chat_box.pack(fill=tk.BOTH, expand=True)
+        self.chat_box.tag_configure("user", foreground="#2b4c70", font=("Segoe UI", 10, "bold"))
+        self.chat_box.tag_configure("jarvis", foreground="#2c5e3b", font=("Segoe UI", 10, "bold"))
+        self.chat_box.tag_configure("meta", foreground="#7a828c", font=("Segoe UI", 8))
+        self.chat_box.tag_configure("action", foreground="#3b5b7d", font=("Segoe UI", 9))
 
-        # Bottom Input Bar
-        input_bar = tk.Frame(left, bg=BG_INPUT, highlightbackground=BORDER_COLOR, highlightthickness=1)
-        input_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        # Divider above input
+        tk.Frame(card, bg=BORDER_COLOR, height=1).pack(fill=tk.X)
+
+        # Input Bar
+        input_bar = tk.Frame(card, bg=BG_SUBTLE)
+        input_bar.pack(fill=tk.X)
+
+        entry_wrap = tk.Frame(input_bar, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
+        entry_wrap.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(14, 8), pady=12)
 
         self.entry = tk.Entry(
-            input_bar, font=("Segoe UI", 10), bg=BG_CARD, fg=TEXT_PRIMARY, relief=tk.SOLID, bd=1
+            entry_wrap,
+            font=("Segoe UI", 10),
+            bg=BG_CARD,
+            fg=TEXT_PRIMARY,
+            relief=tk.FLAT,
+            bd=0,
         )
-        self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 6), pady=10, ipady=4)
+        self.entry.pack(fill=tk.X, padx=10, pady=7)
         self.entry.bind("<Return>", lambda _e: self._on_send())
+        self.entry.focus_set()
 
         self.mic_btn = tk.Button(
             input_bar,
             text="Speak",
             font=("Segoe UI", 9, "bold"),
-            bg=BTN_BG,
+            bg=BG_CARD,
             fg=TEXT_PRIMARY,
-            relief=tk.SOLID,
-            bd=1,
-            padx=12,
-            pady=4,
+            relief=tk.FLAT,
+            highlightbackground=BORDER_COLOR,
+            highlightthickness=1,
+            cursor="hand2",
+            padx=14,
+            pady=7,
             command=self._toggle_recording,
         )
-        self.mic_btn.pack(side=tk.LEFT, padx=(0, 6), pady=10)
+        self.mic_btn.pack(side=tk.LEFT, padx=(0, 8), pady=12)
+        _bind_hover(self.mic_btn, BG_CARD, BTN_HOVER)
 
         self.send_btn = tk.Button(
             input_bar,
@@ -206,94 +258,39 @@ class JarvisDesktopGUI:
             bg=ACCENT,
             fg=ACCENT_TEXT,
             relief=tk.FLAT,
-            padx=14,
-            pady=5,
+            cursor="hand2",
+            padx=18,
+            pady=7,
             command=self._on_send,
         )
-        self.send_btn.pack(side=tk.LEFT, padx=(0, 10), pady=10)
+        self.send_btn.pack(side=tk.LEFT, padx=(0, 14), pady=12)
+        _bind_hover(self.send_btn, ACCENT, ACCENT_HOVER)
 
-        # Right Panel (Sidebar)
-        right = tk.Frame(body, bg=BG_MAIN, width=250)
-        right.pack(side=tk.RIGHT, fill=tk.Y)
-        right.pack_propagate(False)
-
-        # Settings card
-        settings_card = tk.Frame(right, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
-        settings_card.pack(fill=tk.X, pady=(0, 10))
+        # Clean Footer with Team Credits
+        footer = tk.Frame(self.root, bg=BG_MAIN)
+        footer.pack(fill=tk.X, padx=18, pady=(0, 12))
         tk.Label(
-            settings_card, text="Settings", font=("Segoe UI", 10, "bold"), bg=BG_CARD, fg=TEXT_PRIMARY
-        ).pack(anchor="w", padx=12, pady=(10, 4))
-        tk.Checkbutton(
-            settings_card,
-            text="Speak replies aloud",
-            variable=self.speak_enabled,
-            font=("Segoe UI", 9),
-            bg=BG_CARD,
-            fg=TEXT_PRIMARY,
-            activebackground=BG_CARD,
-        ).pack(anchor="w", padx=10, pady=(0, 10))
-
-        # Sample Commands card
-        samples_card = tk.Frame(right, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
-        samples_card.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(
-            samples_card,
-            text="Quick Test Commands",
-            font=("Segoe UI", 10, "bold"),
-            bg=BG_CARD,
-            fg=TEXT_PRIMARY,
-        ).pack(anchor="w", padx=12, pady=(10, 6))
-
-        samples = [
-            ("Open Chrome", "open chrome"),
-            ("Open New Tab", "open new tab"),
-            ("Close Tab", "close tab"),
-            ("Search Google: Poco X6 Neo", "search in google about poco x6 neo"),
-            ("Play Believer on YouTube", "play believer on youtube"),
-            ("What is the time?", "what is the time"),
-            ("Explain how a plane flies", "Explain how a plane flies."),
-            ("Tell me a joke", "Tell me a funny joke."),
-        ]
-        for label, cmd in samples:
-            tk.Button(
-                samples_card,
-                text=label,
-                anchor="w",
-                font=("Segoe UI", 8),
-                bg="#f9fafb",
-                fg=TEXT_PRIMARY,
-                relief=tk.SOLID,
-                bd=1,
-                padx=8,
-                pady=4,
-                command=lambda c=cmd: self._submit_text(c),
-            ).pack(fill=tk.X, padx=10, pady=2)
-        tk.Frame(samples_card, bg=BG_CARD, height=8).pack()
-
-        # Team Credits card
-        team_card = tk.Frame(right, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
-        team_card.pack(fill=tk.X)
-        tk.Label(
-            team_card, text="Team Modules", font=("Segoe UI", 10, "bold"), bg=BG_CARD, fg=TEXT_PRIMARY
-        ).pack(anchor="w", padx=12, pady=(10, 4))
-        tk.Label(
-            team_card,
-            text="Module 1 (STT): Prashobh Nair\nModule 2 (Brain): Sahaj Patel\nModule 3 (TTS): Zeel Vasoya\nModule 4 (OS / UI): Mayank",
-            justify=tk.LEFT,
+            footer,
+            text="Modules:  STT (Prashobh Nair)  •  Brain (Sahaj Patel)  •  TTS (Zeel Vasoya)  •  OS & UI (Mayank)",
             font=("Segoe UI", 8),
-            bg=BG_CARD,
+            bg=BG_MAIN,
             fg=TEXT_MUTED,
-        ).pack(anchor="w", padx=12, pady=(0, 10))
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            footer,
+            text="100% Local Execution",
+            font=("Segoe UI", 8),
+            bg=BG_MAIN,
+            fg=TEXT_MUTED,
+        ).pack(side=tk.RIGHT)
 
         self._append_chat(
             "Jarvis",
-            "Hello! Type a command, click a Quick Test button, or click Speak to use your microphone.",
+            "Hello! Type any question or desktop command below, or click Speak to talk to me.",
         )
 
     def _start_background_workers(self) -> None:
-        # Dedicated speaker thread so TTS never blocks the GUI or command execution
         threading.Thread(target=self._tts_worker, daemon=True).start()
-        # Background model initializer (Kokoro first before Ollama reserves RAM)
         threading.Thread(target=self._init_models, daemon=True).start()
 
     def _safe_after(self, fn) -> None:
@@ -319,7 +316,9 @@ class JarvisDesktopGUI:
 
         self._safe_after(
             lambda: self.status_label.config(
-                text=f"Brain: {brain_desc}  |  TTS: {self.tts_mode}", fg="#2e6f40"
+                text=f"Brain: {brain_desc}  |  TTS: {self.tts_mode}",
+                bg=STATUS_OK_BG,
+                fg=STATUS_OK_FG,
             )
         )
 
@@ -381,7 +380,6 @@ class JarvisDesktopGUI:
         actions_log = []
         if plan.get("steps"):
             if plan.get("needs_confirmation"):
-                # Ask confirmation safely on GUI main thread
                 approved = self._ask_confirmation_sync(reply)
                 if approved:
                     actions_log = self.executor.execute_plan(plan)
@@ -392,9 +390,9 @@ class JarvisDesktopGUI:
             else:
                 actions_log = self.executor.execute_plan(plan)
 
-        meta = f"Intent: {intent} | Engine: {backend} | {latency_ms} ms"
-        self.root.after(0, lambda: self._append_chat("Jarvis", reply, actions_log, meta))
-        self.root.after(0, lambda: self.send_btn.config(state=tk.NORMAL))
+        meta = f"Intent: {intent}  •  Engine: {backend}  •  {latency_ms} ms"
+        self._safe_after(lambda: self._append_chat("Jarvis", reply, actions_log, meta))
+        self._safe_after(lambda: self.send_btn.config(state=tk.NORMAL))
         self._enqueue_speech(reply)
 
     def _ask_confirmation_sync(self, prompt: str) -> bool:
@@ -405,7 +403,7 @@ class JarvisDesktopGUI:
             result[0] = messagebox.askyesno("Confirm System Action", prompt)
             ev.set()
 
-        self.root.after(0, ask)
+        self._safe_after(ask)
         ev.wait()
         return result[0]
 
@@ -427,7 +425,7 @@ class JarvisDesktopGUI:
                 messagebox.showerror("Microphone Error", f"Could not access microphone:\n{e}")
         else:
             self.is_recording = False
-            self.mic_btn.config(text="Speak", bg=BTN_BG, fg=TEXT_PRIMARY)
+            self.mic_btn.config(text="Speak", bg=BG_CARD, fg=TEXT_PRIMARY)
             try:
                 self.audio_stream.stop()
                 self.audio_stream.close()
@@ -454,16 +452,16 @@ class JarvisDesktopGUI:
             res = self.stt.transcribe_with_metadata(audio)
             recognized = (res.get("text") or "").strip()
         except Exception as e:
-            self.root.after(0, lambda: self._append_chat("Jarvis", f"STT error: {e}"))
-            self.root.after(0, lambda: self.mic_btn.config(state=tk.NORMAL))
+            self._safe_after(lambda: self._append_chat("Jarvis", f"STT error: {e}"))
+            self._safe_after(lambda: self.mic_btn.config(state=tk.NORMAL))
             return
 
-        self.root.after(0, lambda: self.mic_btn.config(state=tk.NORMAL))
+        self._safe_after(lambda: self.mic_btn.config(state=tk.NORMAL))
         if not recognized:
-            self.root.after(0, lambda: self._append_chat("Jarvis", "I didn't hear anything. Please try again."))
+            self._safe_after(lambda: self._append_chat("Jarvis", "I didn't hear anything. Please try again."))
             return
 
-        self.root.after(0, lambda: self._append_chat("You", recognized))
+        self._safe_after(lambda: self._append_chat("You", recognized))
         threading.Thread(target=self._process_command, args=(recognized,), daemon=True).start()
 
 
