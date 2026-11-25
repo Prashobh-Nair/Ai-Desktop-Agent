@@ -141,6 +141,7 @@ class Brain:
     def plan(self, text: str, session_id: str = "default") -> Dict:
         start = time.perf_counter()
         ctx = self.sessions.setdefault(session_id, {})
+        history = ctx.setdefault("history", [])
         used, note = "rules", None
 
         if self.mode == "rules" or (not self.gemini_available and not self.ollama_available):
@@ -157,15 +158,18 @@ class Brain:
                 backend_name, llm = self._active_llm()
                 if llm is not None:
                     try:
-                        if _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
+                        if backend_name == "gemini":
+                            plan, used = llm.plan(text, history=history), "gemini"
+                        elif _CHAT_QUESTION_RE.match(text) and not _EXPLICIT_SEARCH_RE.search(text):
                             answer = llm.chat_answer(text)
                             plan, used = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0), backend_name
                         else:
                             plan, used = llm.plan(text), backend_name
-                            has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
-                            if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
-                                answer = llm.chat_answer(text)
-                                plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
+
+                        has_search_step = any(s.action == Action.SEARCH for s in plan.steps)
+                        if (plan.intent == Intent.SEARCH_WEB or has_search_step) and not _EXPLICIT_SEARCH_RE.search(text):
+                            answer = llm.chat_answer(text, history=history) if backend_name == "gemini" else llm.chat_answer(text)
+                            plan = Plan(intent=Intent.CHAT, steps=[], reply=answer, confidence=1.0)
                     except (ModelUnavailable, BadModelOutput) as e:
                         # Automatic offline fallback to Ollama if Gemini fails (e.g., no internet)
                         if backend_name == "gemini":
@@ -195,6 +199,12 @@ class Brain:
                 s.target = ctx.get("last_app")
 
         plan.reply = make_reply(plan)
+
+        # Save turn to session memory (max 10 messages = 5 turns)
+        history.append({"role": "user", "content": text})
+        history.append({"role": "assistant", "content": plan.reply or ""})
+        if len(history) > 10:
+            ctx["history"] = history[-10:]
 
         for s in plan.steps:                  # remember the app in use
             if s.action in (Action.OPEN_APP, Action.PLAY) and s.target:

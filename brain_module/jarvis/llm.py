@@ -25,6 +25,36 @@ CHAT_SYSTEM_PROMPT = (
     "in 1 to 3 concise sentences suitable for speaking aloud."
 )
 
+UNIFIED_GEMINI_PROMPT = (
+    "You are Jarvis, an intelligent, helpful AI Desktop Assistant developed by Prashobh Nair, "
+    "Sahaj Patel, Zeel Vasoya, and Mayank.\n"
+    "You must ALWAYS reply with valid JSON matching this exact schema:\n"
+    "{\n"
+    '  "intent": "chat" | "open_app" | "close_app" | "play_media" | "search_web" | "open_website" | "browser_control" | "control_playback" | "system_control" | "info" | "clarify",\n'
+    '  "steps": [{"action": "...", "target": null or str, "query": null or str, "value": null or str}],\n'
+    '  "needs_confirmation": false,\n'
+    '  "clarification_question": null,\n'
+    '  "reply": "natural, concise spoken response",\n'
+    '  "confidence": 0.0 to 1.0\n'
+    "}\n\n"
+    "Rules:\n"
+    "1. For ANY general question, conversation, advice, coding help, joke, follow-up ('what about...', 'why?'), "
+    "or 'tell me about X': set intent='chat', steps=[], and put a smart, clear 1-3 sentence answer in 'reply'.\n"
+    "2. NEVER use action='search' unless the user explicitly asks to search/google/look up on the web.\n"
+    "3. For desktop/browser control, use ONLY these actions:\n"
+    "   - open_app (target: app name like chrome, notepad, calculator, vscode, spotify, youtube, gmail, whatsapp)\n"
+    "   - close_app (target: app name)\n"
+    "   - open_url (value: full https URL)\n"
+    "   - search (target: google|youtube|wikipedia|amazon|flipkart|github, query: search terms)\n"
+    "   - play (target: youtube|spotify, value: 'first_result', preceded by search step)\n"
+    "   - browser (target: 'browser', value: new_tab|close_tab|reopen_tab|next_tab|prev_tab|refresh|back|forward|scroll_down|scroll_up|scroll_top|scroll_bottom|zoom_in|zoom_out|zoom_reset|incognito|history|downloads|bookmark|fullscreen)\n"
+    "   - pause | resume | next | previous\n"
+    "   - volume (value: up|down|mute|unmute)\n"
+    "   - type_text (query: text to type)\n"
+    "   - system (value: shutdown|restart|sleep|lock -> set needs_confirmation=true)\n"
+    "   - get_time | get_date\n"
+)
+
 
 def _load_env_file() -> None:
     """Loads key=value pairs from project .env into os.environ if not already set."""
@@ -57,18 +87,31 @@ class GeminiModel:
     def is_configured(self) -> bool:
         return bool(self.api_key and self.api_key != "your_gemini_api_key_here")
 
-    def _generate(self, system_prompt: str, user_text: str, json_mode: bool = False) -> str:
+    def _generate(
+        self,
+        system_prompt: str,
+        user_text: str,
+        json_mode: bool = False,
+        history: list[dict] | None = None,
+    ) -> str:
         if not self.is_configured:
             raise ModelUnavailable("GEMINI_API_KEY is not configured.")
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
-        gen_cfg: dict = {"temperature": 0.0 if json_mode else 0.3, "maxOutputTokens": 220}
+        gen_cfg: dict = {"temperature": 0.2 if json_mode else 0.4, "maxOutputTokens": 350}
         if json_mode:
             gen_cfg["responseMimeType"] = "application/json"
 
+        contents = []
+        if history:
+            for msg in history[-10:]:
+                role = "model" if msg.get("role") == "assistant" else "user"
+                contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+        contents.append({"role": "user", "parts": [{"text": user_text}]})
+
         body = json.dumps({
             "systemInstruction": {"parts": [{"text": system_prompt}]},
-            "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+            "contents": contents,
             "generationConfig": gen_cfg,
         }).encode("utf-8")
 
@@ -82,11 +125,11 @@ class GeminiModel:
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, KeyError, IndexError) as e:
             raise ModelUnavailable(str(e)) from e
 
-    def chat_answer(self, text: str) -> str:
-        return self._generate(CHAT_SYSTEM_PROMPT, text, json_mode=False)
+    def chat_answer(self, text: str, history: list[dict] | None = None) -> str:
+        return self._generate(CHAT_SYSTEM_PROMPT, text, json_mode=False, history=history)
 
-    def plan(self, text: str) -> Plan:
-        raw = self._generate(SYSTEM_PROMPT, text, json_mode=True)
+    def plan(self, text: str, history: list[dict] | None = None) -> Plan:
+        raw = self._generate(UNIFIED_GEMINI_PROMPT, text, json_mode=True, history=history)
         try:
             return Plan.model_validate_json(raw)
         except ValidationError as e:
