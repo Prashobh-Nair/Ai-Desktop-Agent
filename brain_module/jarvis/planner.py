@@ -67,18 +67,18 @@ class RulesPlanner:
                 reply="I am running at optimal performance, ready for your commands!",
                 confidence=1.0,
             )
-        if re.search(r"\b(?:who\s+(?:made|created|built|developed|coded)\s+you|who\s+are\s+your\s+creators|kisne\s+banaya)\b", clean_raw):
+        if re.search(r"\b(?:who\s+(?:has\s+)?(?:made|created|built|developed|coded)\s+(?:you|it|this|jarvis)|who\s+are\s+(?:your|the)\s+(?:creators|developers|makers)|kisne\s+banaya)\b", clean_raw):
             return Plan(
                 intent=Intent.CHAT,
                 steps=[],
-                reply="I was developed by Prashobh Nair, Sahaj Patel, and Zeel Vasoya for our AI Autonomous Desktop Agent project.",
+                reply="I was developed by Prashobh Nair, Sahaj Patel, Zeel Vasoya, and Mayank for our AI Autonomous Desktop Agent project.",
                 confidence=1.0,
             )
         if re.search(r"\b(?:who\s+are\s+you|what\s+is\s+your\s+name|tum\s+kaun\s+ho|introduce\s+yourself)\b", clean_raw):
             return Plan(
                 intent=Intent.CHAT,
                 steps=[],
-                reply="I am the AI-Powered Autonomous Desktop Agent, developed by Prashobh Nair, Sahaj Patel, and Zeel Vasoya.",
+                reply="I am Jarvis, the AI-Powered Autonomous Desktop Agent, developed by Prashobh Nair, Sahaj Patel, Zeel Vasoya, and Mayank.",
                 confidence=1.0,
             )
         if re.search(r"\b(?:what\s+can\s+you\s+do|capabilities|features|commands|what\s+are\s+your\s+features|tum\s+kya\s+kar\s+sakte\s+ho)\b", clean_raw) or clean_raw in ("help", "features", "commands"):
