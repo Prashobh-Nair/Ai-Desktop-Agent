@@ -97,7 +97,7 @@ DEFAULT_HOTWORDS = (
     "ChatGPT, Python, PowerShell, Believer, Kesariya"
 )
 
-HOTWORDS_FILE = PROJECT_ROOT.parent / "hotwords.txt"
+HOTWORDS_FILE = PROJECT_ROOT / "hotwords.txt"
 
 
 def build_hotwords(extra_terms: Optional[list[str]] = None, max_terms: int = 40) -> str:
@@ -309,7 +309,7 @@ def _load_env_key(name: str) -> str:
     val = os.getenv(name, "").strip()
     if val:
         return val
-    env_path = PROJECT_ROOT.parent / ".env"
+    env_path = PROJECT_ROOT / ".env"
     if env_path.exists():
         try:
             for line in env_path.read_text(encoding="utf-8").splitlines():
