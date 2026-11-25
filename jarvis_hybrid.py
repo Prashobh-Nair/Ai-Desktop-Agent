@@ -172,6 +172,7 @@ def main() -> None:
 
     brain = Brain(mode="auto")
     vision = LocalScreenVision()
+    vision.start_live_watch(interval=2.5)
     executor = ActionExecutor()
     bg_manager = BackgroundTaskManager()
     goal_runner = AutonomousGoalRunner(brain, executor, vision=vision)
@@ -263,6 +264,8 @@ def main() -> None:
         except Exception as e:
             print(f"[Error] {e}")
             time.sleep(0.5)
+
+    vision.stop_live_watch()
 
 
 if __name__ == "__main__":

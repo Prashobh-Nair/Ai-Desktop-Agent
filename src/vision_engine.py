@@ -13,6 +13,8 @@ import base64
 import io
 import json
 import os
+import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -49,6 +51,34 @@ class LocalScreenVision:
 
     def __init__(self, model_id: str = MODEL_ID):
         self.model_id = model_id
+        self._latest_frame: Optional[Image.Image] = None
+        self._latest_frame_ts: float = 0.0
+        self._frame_lock = threading.Lock()
+        self._watch_stop = threading.Event()
+        self._watch_thread: Optional[threading.Thread] = None
+
+    def start_live_watch(self, interval: float = 2.5) -> None:
+        """Continuously buffers the latest screen frame in RAM (Gemini Live style)."""
+        if self._watch_thread and self._watch_thread.is_alive():
+            return
+        self._watch_stop.clear()
+
+        def _loop():
+            while not self._watch_stop.is_set():
+                try:
+                    frame = self.capture_screen(max_width=768)
+                    with self._frame_lock:
+                        self._latest_frame = frame
+                        self._latest_frame_ts = time.time()
+                except Exception:
+                    pass
+                self._watch_stop.wait(interval)
+
+        self._watch_thread = threading.Thread(target=_loop, daemon=True)
+        self._watch_thread.start()
+
+    def stop_live_watch(self) -> None:
+        self._watch_stop.set()
 
     def initialize(self) -> None:
         if LocalScreenVision._model is not None:
@@ -126,14 +156,14 @@ class LocalScreenVision:
             return None
 
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        img.save(buf, format="JPEG", quality=75)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         body = json.dumps({
             "contents": [{
                 "role": "user",
                 "parts": [
                     {"text": f"{prompt_text} Answer concisely in 1 to 3 sentences."},
-                    {"inlineData": {"mimeType": "image/png", "data": b64}},
+                    {"inlineData": {"mimeType": "image/jpeg", "data": b64}},
                 ],
             }],
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": 250},
@@ -183,11 +213,16 @@ class LocalScreenVision:
         )[0].strip()
 
     def analyze_screen(self, question: Optional[str] = None) -> str:
-        """Captures the current screen and answers the user's question locally."""
-        try:
-            img = self.capture_screen()
-        except RuntimeError as e:
-            return str(e)
+        """Analyzes the live screen buffer (or captures fresh) via Gemini Vision -> SmolVLM."""
+        img = None
+        with self._frame_lock:
+            if self._latest_frame is not None and (time.time() - self._latest_frame_ts) < 4.0:
+                img = self._latest_frame
+        if img is None:
+            try:
+                img = self.capture_screen(max_width=768)
+            except RuntimeError as e:
+                return str(e)
         try:
             return self.analyze_image(img, question)
         except Exception as e:
