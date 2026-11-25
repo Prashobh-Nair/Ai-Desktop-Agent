@@ -61,10 +61,11 @@ class SpeechRecognizer:
 
         else:
             # Primary Flagship Local Model: Whisper-Base (74M) or Small (244M)
+            self.device = device or "cpu"
             self.engine_type = "whisper"
             self.whisper_engine = LocalWhisperEngine(
                 model_size=model_size,
-                device="cuda" if torch.cuda.is_available() and str(self.device) != "cpu" else "cpu",
+                device="cuda" if str(self.device) == "cuda" else "cpu",
                 compute_type="int8"
             )
             self.model = None
