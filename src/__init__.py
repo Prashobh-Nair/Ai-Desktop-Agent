@@ -1,12 +1,7 @@
-from src.text import Tokenizer, CTCGreedyDecoder
-from src.features import LogMelSpectrogram
-from src.model import SpeechRecognitionModel
 from src.whisper_engine import LocalWhisperEngine
+from src.vision_engine import LocalScreenVision
 
 __all__ = [
-    "Tokenizer",
-    "CTCGreedyDecoder",
-    "LogMelSpectrogram",
-    "SpeechRecognitionModel",
     "LocalWhisperEngine",
+    "LocalScreenVision",
 ]

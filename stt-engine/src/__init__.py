@@ -1,3 +1,0 @@
-"""
-STT Engine Package.
-"""
