@@ -19,6 +19,8 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
 
+import asyncio
+import io
 import queue
 import re
 import subprocess
@@ -26,6 +28,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import av
+import edge_tts
 import numpy as np
 import sounddevice as sd
 
@@ -56,15 +60,43 @@ def calibrate_noise_floor(seconds: float = 0.8) -> float:
     return max(0.014, min(0.06, ambient * 2.6))
 
 
+INDIAN_TTS_VOICE = os.getenv("JARVIS_VOICE", "en-IN-PrabhatNeural")
+
+
+async def _edge_tts_bytes(text: str, voice: str = INDIAN_TTS_VOICE) -> io.BytesIO:
+    comm = edge_tts.Communicate(text, voice, rate="+4%")
+    buf = io.BytesIO()
+    async for chunk in comm.stream():
+        if chunk["type"] == "audio":
+            buf.write(chunk["data"])
+    buf.seek(0)
+    return buf
+
+
 def speak_reply(text: str, tts_engine=None) -> None:
     """
-    Speaks text completely in memory (RAM-only, zero disk files) with MIC strictly OFF.
-    Blocks until audio playback finishes completely.
+    Speaks text in a natural Indian English voice (RAM-only, zero disk files)
+    with MIC strictly OFF. Falls back to Kokoro-82M / Windows SAPI5 if offline.
     """
     clean = " ".join((text or "").split())
     if not clean:
         return
 
+    # 1. Primary: Natural Indian English Neural Voice (Edge-TTS in RAM)
+    try:
+        buf = asyncio.run(_edge_tts_bytes(clean))
+        container = av.open(buf, format="mp3")
+        frames = [f.to_ndarray().T for f in container.decode(audio=0)]
+        sr = container.streams.audio[0].rate
+        if frames:
+            audio = np.concatenate(frames, axis=0)
+            sd.play(audio, sr)
+            sd.wait()
+            return
+    except Exception:
+        pass
+
+    # 2. Offline Fallback 1: Kokoro-82M in RAM
     if tts_engine is not None and getattr(tts_engine, "_kokoro", None) is not None:
         try:
             processed = tts_engine.text_processor.preprocess_text(clean)
@@ -80,6 +112,7 @@ def speak_reply(text: str, tts_engine=None) -> None:
         except Exception:
             pass
 
+    # 3. Offline Fallback 2: Built-in Windows SAPI5
     safe = clean.replace("'", "''")
     ps_cmd = (
         "Add-Type -AssemblyName System.Speech; "
