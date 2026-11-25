@@ -90,7 +90,12 @@ class SpeechRecognizer:
         else:
             return self.whisper_engine.transcribe(audio_path)
 
-    def transcribe_with_metadata(self, audio_path: str) -> dict:
+    def transcribe_with_metadata(
+        self,
+        audio_path: str,
+        initial_prompt: str = None,
+        hotwords: str = None,
+    ) -> dict:
         """Transcribes with complete metadata (latency, RTF, parameters, language)."""
         if self.engine_type == "custom":
             import time
@@ -116,7 +121,12 @@ class SpeechRecognizer:
                 "offline": True
             }
         else:
-            return self.whisper_engine.transcribe_with_metadata(audio_path)
+            kwargs = {}
+            if initial_prompt is not None:
+                kwargs["initial_prompt"] = initial_prompt
+            if hotwords is not None:
+                kwargs["hotwords"] = hotwords
+            return self.whisper_engine.transcribe_with_metadata(audio_path, **kwargs)
 
     def get_info(self) -> dict:
         """Returns metadata about the active speech recognition engine."""

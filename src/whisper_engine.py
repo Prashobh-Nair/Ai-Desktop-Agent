@@ -80,10 +80,45 @@ WHISPER_SPECS = {
 
 
 DEFAULT_PROMPT_BIAS = (
-    "Autonomous AI Desktop Agent commands. "
-    "Team members: Prashobh Nair, Sahaj Patel, Zeel Vasoya, Mayank. "
-    "Common desktop applications, speech recognition, and technical terms:"
+    "JARVIS desktop assistant commands and natural conversation. "
+    "Names and places: Prashobh Nair, Sahaj Patel, Zeel Vasoya, Mayank, Navrachana University, Vadodara. "
+    "Apps and tools: YouTube, Spotify, Chrome, VS Code, GitHub, Gmail, WhatsApp, Instagram, Gemini, Ollama, ChatGPT, Python, PowerShell."
 )
+
+DEFAULT_HOTWORDS = (
+    "JARVIS, Prashobh Nair, Sahaj Patel, Zeel Vasoya, Mayank, "
+    "Navrachana University, Vadodara, YouTube, Spotify, Chrome, "
+    "VS Code, GitHub, Gmail, WhatsApp, Instagram, Gemini, Ollama, "
+    "ChatGPT, Python, PowerShell, Believer, Kesariya"
+)
+
+HOTWORDS_FILE = PROJECT_ROOT.parent / "hotwords.txt"
+
+
+def build_hotwords(extra_terms: Optional[list[str]] = None, max_terms: int = 40) -> str:
+    """Combines default proper nouns, optional hotwords.txt, and dynamic terms."""
+    seen: set[str] = set()
+    terms: list[str] = []
+
+    def _add(raw: str) -> None:
+        t = raw.strip()
+        if t and t.lower() not in seen and len(terms) < max_terms:
+            seen.add(t.lower())
+            terms.append(t)
+
+    if extra_terms:
+        for item in extra_terms:
+            _add(item)
+    if HOTWORDS_FILE.exists():
+        try:
+            for line in HOTWORDS_FILE.read_text(encoding="utf-8").splitlines():
+                for part in line.split(","):
+                    _add(part)
+        except OSError:
+            pass
+    for part in DEFAULT_HOTWORDS.split(","):
+        _add(part)
+    return ", ".join(terms)
 
 
 class LocalWhisperEngine:
@@ -193,8 +228,9 @@ class LocalWhisperEngine:
         audio_input: Union[str, Path, np.ndarray],
         language: Optional[str] = "en",
         initial_prompt: Optional[str] = DEFAULT_PROMPT_BIAS,
-        beam_size: int = 2,
+        beam_size: int = 5,
         temperature: float = 0.0,
+        hotwords: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Transcribes audio and returns comprehensive transcription & performance metrics.
@@ -214,12 +250,15 @@ class LocalWhisperEngine:
                 "model_parameters": self.specs["parameters"]
             }
 
+        effective_hotwords = hotwords if hotwords is not None else build_hotwords()
         t0 = time.time()
         segments, info = m.transcribe(
             audio_data,
             language=language,
             initial_prompt=initial_prompt,
+            hotwords=effective_hotwords or None,
             beam_size=beam_size,
+            patience=1.0,
             temperature=temperature,
             condition_on_previous_text=False,
         )

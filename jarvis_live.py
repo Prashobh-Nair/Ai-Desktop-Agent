@@ -39,6 +39,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from inference import SpeechRecognizer
+from src.whisper_engine import build_hotwords
 from src.autonomous import AutonomousGoalRunner, BackgroundTaskManager
 from src.executor import ActionExecutor
 from src.vision_engine import LocalScreenVision
@@ -307,7 +308,16 @@ def main():
                 continue
 
             t_stt = time.time()
-            stt_result = stt_recognizer.transcribe_with_metadata(audio_data)
+            memory_terms = []
+            try:
+                for item in brain.memory._load_long_term():
+                    memory_terms.extend(re.findall(r"\b[A-Z][a-zA-Z0-9_-]{2,}\b", item.get("fact", "")))
+            except Exception:
+                pass
+            stt_result = stt_recognizer.transcribe_with_metadata(
+                audio_data,
+                hotwords=build_hotwords(memory_terms),
+            )
             recognized_text = stt_result["text"].strip()
             latency_stt = time.time() - t_stt
             if not recognized_text:
