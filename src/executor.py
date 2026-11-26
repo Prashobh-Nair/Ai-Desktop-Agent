@@ -836,19 +836,64 @@ class ActionExecutor:
         return f"Unknown browser command: {cmd}."
 
     def control_volume(self, value: str) -> str:
-        v = (value or "").strip().lower()
-        if v == "up":
+        v = (value or "").strip().lower().rstrip("%")
+        if v in ("up", "increase", "louder", "higher"):
             for _ in range(5):
                 _press_keys(VK_VOLUME_UP)
             return "Increased volume."
-        if v == "down":
+        if v in ("down", "decrease", "lower", "quieter"):
             for _ in range(5):
                 _press_keys(VK_VOLUME_DOWN)
             return "Decreased volume."
+        if v in ("max", "full", "100"):
+            for _ in range(50):
+                _press_keys(VK_VOLUME_UP)
+            return "Set volume to maximum."
+        if v in ("min", "zero"):
+            for _ in range(50):
+                _press_keys(VK_VOLUME_DOWN)
+            return "Set volume to minimum."
         if v in ("mute", "unmute"):
             _press_keys(VK_VOLUME_MUTE)
             return f"Volume {v}d."
+        if v.isdigit():
+            pct = max(0, min(100, int(v)))
+            for _ in range(50):
+                _press_keys(VK_VOLUME_DOWN)
+            for _ in range(round(pct / 2)):
+                _press_keys(VK_VOLUME_UP)
+            return f"Set volume to {pct}%."
         return f"Unknown volume action: {v}."
+
+    def control_brightness(self, value: str) -> str:
+        v = (value or "").strip().lower().rstrip("%")
+        ps_script = (
+            "$cur = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness; "
+            f"$arg = '{v}'; "
+            "if ($arg -in @('up','increase','brighter','higher')) { $t = [Math]::Min(100, $cur + 15) } "
+            "elseif ($arg -in @('down','decrease','dim','dimmer','lower')) { $t = [Math]::Max(0, $cur - 15) } "
+            "elseif ($arg -in @('max','full')) { $t = 100 } "
+            "elseif ($arg -in @('min','low')) { $t = 10 } "
+            "elseif ($arg -match '^\\d+$') { $t = [Math]::Max(0, [Math]::Min(100, [int]$arg)) } "
+            "else { Write-Output \"ERR:Unknown brightness action: $arg\"; exit 1 }; "
+            "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, $t); "
+            "Write-Output $t"
+        )
+        try:
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                capture_output=True,
+                text=True,
+                timeout=6,
+            )
+            out = (res.stdout or "").strip()
+            if out.startswith("ERR:"):
+                return out[4:]
+            if res.returncode == 0 and out.isdigit():
+                return f"Brightness set to {out}%."
+            return f"Could not adjust brightness: {(res.stderr or out or 'WMI unavailable')[:120]}"
+        except Exception as e:
+            return f"Brightness control failed: {e}"
 
     def control_system(self, value: str) -> str:
         v = (value or "").strip().lower()
@@ -1108,7 +1153,9 @@ class ActionExecutor:
                 _press_keys(VK_MEDIA_PREV_TRACK)
                 logs.append("Went to previous track.")
             elif action == "volume":
-                logs.append(self.control_volume(value))
+                logs.append(self.control_volume(value or query))
+            elif action == "brightness":
+                logs.append(self.control_brightness(value or query))
             elif action == "hotkey":
                 combo = value or query or target
                 if _press_hotkey(combo):
