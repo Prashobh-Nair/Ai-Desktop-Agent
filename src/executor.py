@@ -14,6 +14,7 @@ from __future__ import annotations
 import ctypes
 import os
 import re
+import shutil
 import subprocess
 import time
 import urllib.parse
@@ -24,6 +25,167 @@ from typing import Dict, List, Optional, Tuple
 import psutil
 
 from src.tools import calendar_op, file_op, git_op, web_fetch
+
+
+# ---------------------------------------------------------------------------
+# Chrome Tab-Reuse Engine
+# Always open URLs in a new tab in the existing Chrome window.
+# Never uses Edge or the system default browser.
+# ---------------------------------------------------------------------------
+
+_CHROME_PATHS = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+]
+
+
+def _find_chrome_exe() -> str:
+    """Return the path to chrome.exe, or raise RuntimeError if not found."""
+    for path in _CHROME_PATHS:
+        if os.path.isfile(path):
+            return path
+    # Fallback: search PATH
+    found = shutil.which("chrome") or shutil.which("google-chrome")
+    if found:
+        return found
+    raise RuntimeError("Google Chrome not found on this machine.")
+
+
+def _is_chrome_running() -> bool:
+    """Return True if any chrome.exe process is currently running."""
+    for proc in psutil.process_iter(["name"]):
+        try:
+            if (proc.info.get("name") or "").lower() == "chrome.exe":
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
+
+
+def _focus_chrome_window() -> bool:
+    """
+    Bring the Chrome window to the foreground.
+    Returns True if a Chrome window was found and focused.
+    """
+    user32 = ctypes.windll.user32
+    found_hwnd = None
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def _enum_cb(hwnd, _lparam):
+        nonlocal found_hwnd
+        if found_hwnd is not None:
+            return False
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value.lower()
+                if "google chrome" in title or "chrome" in title:
+                    found_hwnd = hwnd
+                    return False
+        return True
+
+    user32.EnumWindows(_enum_cb, 0)
+    if found_hwnd:
+        SW_RESTORE = 9
+        if user32.IsIconic(found_hwnd):
+            user32.ShowWindow(found_hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(found_hwnd)
+        time.sleep(0.15)
+        return True
+    return False
+
+
+def _chrome_open_url(url: str) -> str:
+    """
+    Open a URL in Chrome.
+    - If Chrome is already running: focus it, open a new tab, navigate there.
+    - If Chrome is not running: launch it with the URL directly.
+    Never opens a new Chrome window for every request.
+    Returns a human-readable result message.
+    """
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+
+    try:
+        chrome_exe = _find_chrome_exe()
+    except RuntimeError:
+        # Last-resort fallback to system default browser
+        webbrowser.open(url)
+        return f"Opened {url} (Chrome not found — used default browser)."
+
+    if _is_chrome_running():
+        # Chrome is running — focus the window, open a new tab, type the URL
+        focused = _focus_chrome_window()
+        if focused:
+            time.sleep(0.1)
+            # Open new tab with Ctrl+T
+            ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)        # Ctrl down
+            ctypes.windll.user32.keybd_event(ord("T"), 0, 0, 0)    # T down
+            ctypes.windll.user32.keybd_event(ord("T"), 0, 2, 0)    # T up
+            ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)        # Ctrl up
+            time.sleep(0.3)
+            # Navigate using the address bar (Ctrl+L then type URL and Enter)
+            ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)        # Ctrl down
+            ctypes.windll.user32.keybd_event(ord("L"), 0, 0, 0)    # L down
+            ctypes.windll.user32.keybd_event(ord("L"), 0, 2, 0)    # L up
+            ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)        # Ctrl up
+            time.sleep(0.2)
+            # Type the URL character by character via SendInput
+            _chrome_type_address(url)
+            time.sleep(0.1)
+            # Press Enter
+            ctypes.windll.user32.keybd_event(0x0D, 0, 0, 0)
+            ctypes.windll.user32.keybd_event(0x0D, 0, 2, 0)
+            return f"Opened {url} in a new Chrome tab."
+        # Window focus failed — fall through to subprocess launch with new-tab flag
+    # Chrome not running (or focus failed) → launch it
+    subprocess.Popen([chrome_exe, url], creationflags=subprocess.DETACHED_PROCESS)
+    time.sleep(0.4)
+    return f"Launched Chrome and opened {url}."
+
+
+def _chrome_type_address(text: str) -> None:
+    """Type a URL into the Chrome address bar using SendInput (Unicode)."""
+    user32 = ctypes.windll.user32
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_UNICODE = 0x0004
+    KEYEVENTF_KEYUP = 0x0002
+
+    class _KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.c_ushort),
+            ("wScan", ctypes.c_ushort),
+            ("dwFlags", ctypes.c_ulong),
+            ("time", ctypes.c_ulong),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class _INPUT_UNION(ctypes.Union):
+        _fields_ = [("ki", _KEYBDINPUT)]
+
+    class _INPUT(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_ulong), ("union", _INPUT_UNION)]
+
+    extra = ctypes.c_ulong(0)
+    for ch in text:
+        code = ord(ch)
+        for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
+            inp = _INPUT(
+                type=INPUT_KEYBOARD,
+                union=_INPUT_UNION(
+                    ki=_KEYBDINPUT(
+                        wVk=0,
+                        wScan=code,
+                        dwFlags=flags,
+                        time=0,
+                        dwExtraInfo=ctypes.pointer(extra),
+                    )
+                ),
+            )
+            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
+        time.sleep(0.003)
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +273,17 @@ def _scroll_wheel(delta: int) -> None:
 
 
 def _focus_browser_window() -> bool:
-    """Finds an open browser window (Chrome/Edge/Brave/Firefox) and brings it to focus."""
+    """
+    Finds an open Chrome window and brings it to focus.
+    Falls back to any browser window if Chrome is not open.
+    """
+    # Prefer Chrome window first
+    if _focus_chrome_window():
+        return True
+    # Fallback: any browser
     user32 = ctypes.windll.user32
     found_hwnd = None
-    browser_keywords = ("google chrome", "microsoft edge", "mozilla firefox", "brave", "opera")
+    browser_keywords = ("mozilla firefox", "brave", "opera")
 
     @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
     def enum_cb(hwnd, _lparam):
@@ -487,8 +656,7 @@ class ActionExecutor:
     def open_app(self, target: str) -> str:
         t = (target or "").strip().lower()
         if t in WEB_APPS:
-            webbrowser.open(WEB_APPS[t])
-            return f"Opened {t} in browser."
+            return _chrome_open_url(WEB_APPS[t])
 
         cmd = DESKTOP_LAUNCH.get(t, t)
         try:
@@ -524,15 +692,13 @@ class ActionExecutor:
             return "No URL provided."
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
-        webbrowser.open(url)
-        return f"Opened {url}."
+        return _chrome_open_url(url)
 
     def search_web(self, target: str, query: str) -> str:
         t = (target or "google").strip().lower()
         template = SEARCH_URL_TEMPLATES.get(t, SEARCH_URL_TEMPLATES["google"])
         url = template.format(q=urllib.parse.quote_plus(query or ""))
-        webbrowser.open(url)
-        return f"Searched {t} for '{query}'."
+        return _chrome_open_url(url)
 
     def play_media(self, target: str, query: Optional[str]) -> str:
         t = (target or "youtube").strip().lower()
@@ -543,8 +709,7 @@ class ActionExecutor:
         if t == "youtube":
             video_url = self._find_first_youtube_video(query)
             if video_url:
-                webbrowser.open(video_url)
-                return f"Playing '{query}' on YouTube."
+                return _chrome_open_url(video_url)
         return self.search_web(t, query)
 
     def control_browser(self, command: str) -> str:
