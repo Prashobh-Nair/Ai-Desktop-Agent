@@ -114,7 +114,7 @@ class GroqBrainModel:
 
     ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
-    def __init__(self, api_key: str | None = None, model_name: str = "openai/gpt-oss-20b", timeout: float = 6.0):
+    def __init__(self, api_key: str | None = None, model_name: str = "openai/gpt-oss-120b", timeout: float = 6.0):
         _load_env_file()
         self.api_key = (api_key or os.getenv("GROQ_API_KEY", "")).strip()
         self.model_name = model_name
@@ -156,7 +156,7 @@ class GroqBrainModel:
             payload["response_format"] = {"type": "json_object"}
 
         models_to_try: list[str] = []
-        for m in (self.model_name, "openai/gpt-oss-120b", "qwen/qwen3.8-27b"):
+        for m in (self.model_name, "openai/gpt-oss-20b", "qwen/qwen3.8-27b"):
             if m and m not in models_to_try:
                 models_to_try.append(m)
 

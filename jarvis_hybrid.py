@@ -230,7 +230,7 @@ def main() -> None:
 
     stt_mode = "Groq Whisper large-v3-turbo (API) -> Local Whisper" if stt.groq_engine.is_configured else "Local Whisper-Small.en (244M)"
     if getattr(brain, "groq_available", False):
-        brain_mode = "Groq GPT-OSS-20B (Fast API) -> Gemini -> Local Ollama"
+        brain_mode = "Groq GPT-OSS-120B (Fast API) -> Gemini -> Local Ollama"
     elif brain.gemini_available:
         brain_mode = "Gemini (API) -> Local Ollama"
     else:
