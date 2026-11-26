@@ -56,6 +56,19 @@ class LocalScreenVision:
         self._frame_lock = threading.Lock()
         self._watch_stop = threading.Event()
         self._watch_thread: Optional[threading.Thread] = None
+        self._http = self._new_http_client()
+
+    @staticmethod
+    def _new_http_client():
+        try:
+            import httpx
+            return httpx.Client(
+                transport=httpx.HTTPTransport(local_address="0.0.0.0"),
+                timeout=httpx.Timeout(8.0, connect=3.0),
+                limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=45.0),
+            )
+        except Exception:
+            return None
 
     def start_live_watch(self, interval: float = 2.5) -> None:
         """Continuously buffers the latest screen frame in RAM (Gemini Live style)."""
@@ -192,12 +205,31 @@ class LocalScreenVision:
             "generationConfig": gen_cfg,
         }).encode("utf-8")
 
-        for model_id in ("gemini-2.0-flash-lite", "gemini-2.0-flash"):
+        for model_id in ("gemini-flash-lite-latest", "gemini-3-flash-preview", "gemini-3.1-flash-lite"):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
             try:
-                import httpx
-                with httpx.Client(timeout=httpx.Timeout(6.0, connect=2.5)) as client:
-                    resp = client.post(url, content=body, headers={"Content-Type": "application/json"})
+                if self._http is None:
+                    self._http = self._new_http_client()
+                if self._http is not None:
+                    for attempt in range(2):
+                        try:
+                            resp = self._http.post(url, content=body, headers={"Content-Type": "application/json"})
+                            break
+                        except Exception:
+                            if attempt == 0:
+                                try:
+                                    self._http.close()
+                                except Exception:
+                                    pass
+                                self._http = self._new_http_client()
+                                continue
+                            raise
+                else:
+                    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=8.0) as r:
+                        data = json.loads(r.read())
+                        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
                 if resp.status_code in (404, 429, 500, 503, 504):
                     continue
                 if resp.status_code >= 400:
