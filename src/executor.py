@@ -167,6 +167,62 @@ def _chrome_wait_for_page_load(timeout: float = 5.0) -> None:
         time.sleep(0.25)
 
 
+def _get_chrome_hwnd_and_title() -> Tuple[Optional[int], str]:
+    """Returns (hwnd, title) of the main Google Chrome window if open."""
+    user32 = ctypes.windll.user32
+    found_hwnd = None
+    found_title = ""
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def _cb(hwnd, _lp):
+        nonlocal found_hwnd, found_title
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                if "google chrome" in buf.value.lower():
+                    found_hwnd = hwnd
+                    found_title = buf.value
+                    return False
+        return True
+
+    user32.EnumWindows(_cb, 0)
+    return found_hwnd, found_title
+
+
+def _chrome_switch_to_existing_tab(keyword: str, max_tabs: int = 10) -> bool:
+    """
+    Checks if a tab matching `keyword` (e.g. 'whatsapp') is already open in Chrome.
+    If found, leaves that tab active and focused and returns True.
+    """
+    kw = (keyword or "").strip().lower()
+    if not kw or not _focus_chrome_window():
+        return False
+
+    hwnd, start_title = _get_chrome_hwnd_and_title()
+    if not hwnd:
+        return False
+    if kw in start_title.lower():
+        return True
+
+    user32 = ctypes.windll.user32
+    for _ in range(max_tabs):
+        _chrome_press_combo(0x11, 0x09)  # Ctrl+Tab
+        time.sleep(0.08)
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            continue
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        cur_title = buf.value
+        if kw in cur_title.lower():
+            return True
+        if cur_title == start_title:
+            break
+    return False
+
+
 def _chrome_open_url(url: str, wait_load: bool = True) -> str:
     """
     Open an exact URL in Google Chrome.
@@ -623,6 +679,7 @@ WEB_APPS: Dict[str, str] = {
     "gmail": "https://mail.google.com",
     "instagram": "https://www.instagram.com",
     "whatsapp": "https://web.whatsapp.com",
+    "whatsapp web": "https://web.whatsapp.com",
     "netflix": "https://www.netflix.com",
     "prime video": "https://www.primevideo.com",
     "amazon": "https://www.amazon.in",
@@ -747,7 +804,12 @@ class ActionExecutor:
     def open_app(self, target: str) -> str:
         t = (target or "").strip().lower()
         if t in WEB_APPS:
-            return _chrome_open_url(WEB_APPS[t])
+            # Reuse existing tab for stateful web apps (e.g. WhatsApp Web, Gmail, ChatGPT)
+            tab_kw = "whatsapp" if "whatsapp" in t else t
+            if tab_kw in ("whatsapp", "gmail", "chatgpt"):
+                if _chrome_switch_to_existing_tab(tab_kw):
+                    return f"Switched to existing {tab_kw.title()} tab in Chrome."
+            return _chrome_open_url(WEB_APPS[t], wait_load=("whatsapp" in t))
 
         if t == "chrome":
             if _focus_chrome_window():
