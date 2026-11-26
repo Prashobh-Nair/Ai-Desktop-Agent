@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JARVIS</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- Subtle ambient light field (pearl white + icy cyan + warm peach) -->
+  <div class="ambient-bg" aria-hidden="true">
+    <div class="ambient-blob blob-cyan"></div>
+    <div class="ambient-blob blob-orange"></div>
+    <div class="ambient-blob blob-violet"></div>
+  </div>
+
+  <!-- Minimal top-left identity mark -->
+  <header class="brand-mark">
+    <span class="brand-dot" id="brand-dot"></span>
+    <span class="brand-name">JARVIS</span>
+  </header>
+
+  <!-- Central Voice-First Stage -->
+  <main class="stage">
+    <div class="orb-wrap" id="orb-wrap">
+      <canvas id="jarvis-orb" width="520" height="520"></canvas>
+    </div>
+
+    <div class="state-pill" id="state-pill">
+      <span class="state-dot" id="state-dot"></span>
+      <span class="state-label" id="state-label">Ready</span>
+    </div>
+  </main>
+
+  <!-- Gemini-Style Floating Task Execution Popup (hidden when idle) -->
+  <aside class="task-popup" id="task-popup" aria-live="polite" aria-hidden="true">
+    <div class="task-header">
+      <span class="task-badge-dot" id="task-badge-dot"></span>
+      <span class="task-header-title" id="task-header-title">JARVIS &mdash; EXECUTING</span>
+    </div>
+
+    <div class="task-current" id="task-current"></div>
+
+    <div class="task-progress-wrap">
+      <div class="task-progress-label">Progress</div>
+      <ul class="task-steps" id="task-steps"></ul>
+    </div>
+  </aside>
+
+  <script src="/static/orb.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

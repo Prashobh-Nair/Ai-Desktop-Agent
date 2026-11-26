@@ -970,7 +970,14 @@ class ActionExecutor:
         except Exception as e:
             return f"Terminal command failed: {e}"
 
-    def execute_plan(self, plan: Dict, memory=None, vision=None, plugin_manager=None) -> List[str]:
+    def execute_plan(
+        self,
+        plan: Dict,
+        memory=None,
+        vision=None,
+        plugin_manager=None,
+        step_callback=None,
+    ) -> List[str]:
         """Executes all steps in a Brain Plan dictionary in order and returns status logs."""
         steps = plan.get("steps") or []
         if not steps:
@@ -986,6 +993,11 @@ class ActionExecutor:
         last_typed_step: Optional[Dict] = None
         total = len(steps)
         for idx, step in enumerate(steps):
+            if step_callback is not None:
+                try:
+                    step_callback(idx, "active", None)
+                except Exception:
+                    pass
             action = step.get("action")
             target = step.get("target") or ""
             query = step.get("query") or ""
@@ -999,11 +1011,21 @@ class ActionExecutor:
                 if t_low in WEB_APPS:
                     if has_play:
                         # play_media handles full navigation + search, skip bare open
+                        if step_callback is not None:
+                            try:
+                                step_callback(idx, "done", None)
+                            except Exception:
+                                pass
                         continue
                     if has_search:
                         # Open the site and wait — search step will use in_page=True
                         logs.append(_chrome_open_url(WEB_APPS[t_low], wait_load=True))
                         last_opened_app = target
+                        if step_callback is not None:
+                            try:
+                                step_callback(idx, "done", None)
+                            except Exception:
+                                pass
                         continue
                 logs.append(self.open_app(target))
                 last_opened_app = target
@@ -1137,5 +1159,13 @@ class ActionExecutor:
                         "Saved memories: " + "; ".join(i["fact"] for i in items[-5:])
                         if items else "No saved personal memories yet."
                     )
+
+            if step_callback is not None:
+                try:
+                    last_out = (logs[-1] if logs else "").lower()
+                    st = "error" if any(k in last_out for k in ("could not", "failed", "not found", "unavailable")) else "done"
+                    step_callback(idx, st, None)
+                except Exception:
+                    pass
 
         return logs
