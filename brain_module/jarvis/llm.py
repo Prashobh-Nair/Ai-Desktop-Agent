@@ -69,6 +69,7 @@ UNIFIED_GEMINI_PROMPT = (
     "   - volume (value: up|down|mute|unmute|max|min|<0-100>)\n"
     "   - brightness (value: up|down|max|min|<0-100>)\n"
     "   - wallpaper (query: requested theme/filename, OR 'random' if no specific theme was named)\n"
+    "   - screenshot (captures the screen and copies it to clipboard without saving)\n"
     "   - type_text (query: text to type, value: null | 'replace' (select-all+delete first) | 'enter' (press Enter after))\n"
     "   - hotkey (value: shortcut like 'ctrl+a', 'ctrl+c', 'ctrl+v', 'ctrl+s', 'ctrl+z', 'enter', 'tab', 'backspace', 'delete', 'escape', 'alt+tab')\n"
     "   - click_element (query: visual description of button/text field/menu/link to locate on screen and click, value: 'click'|'double_click'|'right_click')\n"

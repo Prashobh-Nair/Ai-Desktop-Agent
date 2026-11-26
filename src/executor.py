@@ -1087,6 +1087,60 @@ class ActionExecutor:
             return f"Changed desktop wallpaper to '{q}'."
         return "Failed to apply desktop wallpaper."
 
+    def take_screenshot_to_clipboard(self) -> str:
+        """Captures the screen in RAM and copies it as CF_DIB to Windows clipboard (no file saved)."""
+        import io
+        from PIL import ImageGrab
+
+        try:
+            img = ImageGrab.grab()
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="BMP")
+            dib_data = buf.getvalue()[14:]  # Strip 14-byte BITMAPFILEHEADER for CF_DIB
+        except Exception as e:
+            return f"Failed to capture screenshot: {e}"
+
+        try:
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            CF_DIB = 8
+            GMEM_MOVEABLE = 0x0002
+
+            kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+            kernel32.GlobalAlloc.restype = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalUnlock.restype = ctypes.c_bool
+            kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalFree.restype = ctypes.c_void_p
+            user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+            user32.OpenClipboard.restype = ctypes.c_bool
+            user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+            user32.SetClipboardData.restype = ctypes.c_void_p
+
+            if not user32.OpenClipboard(None):
+                return "Could not open Windows clipboard."
+            try:
+                user32.EmptyClipboard()
+                h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(dib_data))
+                if not h_mem:
+                    return "Clipboard memory allocation failed."
+                ptr = kernel32.GlobalLock(h_mem)
+                if not ptr:
+                    kernel32.GlobalFree(h_mem)
+                    return "Clipboard memory lock failed."
+                ctypes.memmove(ptr, dib_data, len(dib_data))
+                kernel32.GlobalUnlock(h_mem)
+                if not user32.SetClipboardData(CF_DIB, h_mem):
+                    kernel32.GlobalFree(h_mem)
+                    return "Failed to copy screenshot to clipboard."
+                return "Screenshot copied to clipboard."
+            finally:
+                user32.CloseClipboard()
+        except Exception as e:
+            return f"Clipboard error: {e}"
+
     def control_system(self, value: str) -> str:
         v = (value or "").strip().lower()
         if v == "lock":
@@ -1366,6 +1420,8 @@ class ActionExecutor:
                 logs.append(self.control_brightness(value or query))
             elif action == "wallpaper":
                 logs.append(self.set_wallpaper(query or value or target))
+            elif action == "screenshot":
+                logs.append(self.take_screenshot_to_clipboard())
             elif action == "hotkey":
                 combo = value or query or target
                 if _press_hotkey(combo):

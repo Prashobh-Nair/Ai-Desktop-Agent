@@ -85,6 +85,8 @@ def _humanize_step(step: Dict[str, Any]) -> str:
         return f"Adjusting brightness ({value or 'change'})"
     if action == "wallpaper":
         return f"Changing wallpaper ({query or 'new'})"
+    if action == "screenshot":
+        return "Copying screenshot to clipboard"
     return f"Executing {action.replace('_', ' ')}"
 
 
