@@ -329,15 +329,21 @@ class GroqWhisperClient:
 
     ENDPOINT = "https://api.groq.com/openai/v1/audio/transcriptions"
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "whisper-large-v3-turbo", timeout: float = 10.0):
+    def __init__(self, api_key: Optional[str] = None, model: str = "whisper-large-v3-turbo", timeout: float = 6.0):
         self.api_key = (api_key or _load_env_key("GROQ_API_KEY")).strip()
         self.model = model
         self.timeout = timeout
+        self._http = self._new_http_client()
+
+    def _new_http_client(self):
         try:
             import httpx
-            self._http = httpx.Client(timeout=self.timeout)
+            return httpx.Client(
+                timeout=httpx.Timeout(self.timeout, connect=2.5),
+                limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=45.0),
+            )
         except Exception:
-            self._http = None
+            return None
 
     @property
     def is_configured(self) -> bool:
@@ -397,9 +403,21 @@ class GroqWhisperClient:
         }
         t0 = time.time()
         if self._http is not None:
-            resp = self._http.post(self.ENDPOINT, content=body, headers=headers)
-            resp.raise_for_status()
-            payload = resp.json()
+            for attempt in range(2):
+                try:
+                    resp = self._http.post(self.ENDPOINT, content=body, headers=headers)
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    break
+                except Exception:
+                    if attempt == 0:
+                        try:
+                            self._http.close()
+                        except Exception:
+                            pass
+                        self._http = self._new_http_client()
+                        continue
+                    raise
         else:
             req = urllib.request.Request(self.ENDPOINT, data=body, headers=headers)
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:

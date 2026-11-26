@@ -116,16 +116,22 @@ class GroqBrainModel:
 
     ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
-    def __init__(self, api_key: str | None = None, model_name: str = "openai/gpt-oss-120b", timeout: float = 6.0):
+    def __init__(self, api_key: str | None = None, model_name: str = "openai/gpt-oss-120b", timeout: float = 4.5):
         _load_env_file()
         self.api_key = (api_key or os.getenv("GROQ_API_KEY", "")).strip()
         self.model_name = model_name
         self.timeout = timeout
+        self._http = self._new_http_client()
+
+    def _new_http_client(self):
         try:
             import httpx
-            self._http = httpx.Client(timeout=self.timeout)
+            return httpx.Client(
+                timeout=httpx.Timeout(self.timeout, connect=2.5),
+                limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=45.0),
+            )
         except Exception:
-            self._http = None
+            return None
 
     @property
     def is_configured(self) -> bool:
@@ -180,19 +186,29 @@ class GroqBrainModel:
                 "User-Agent": "Jarvis-Desktop-Agent/1.0",
             }
             if self._http is not None:
-                try:
-                    resp = self._http.post(self.ENDPOINT, json=payload, headers=headers)
-                    if resp.status_code >= 400:
-                        last_err = ModelUnavailable(f"Groq error {resp.status_code} ({model_id}): {resp.text[:200]}")
-                        if resp.status_code in (400, 404, 429, 500, 503, 504) and idx + 1 < len(models_to_try):
+                for attempt in range(2):
+                    try:
+                        resp = self._http.post(self.ENDPOINT, json=payload, headers=headers)
+                        if resp.status_code >= 400:
+                            last_err = ModelUnavailable(f"Groq error {resp.status_code} ({model_id}): {resp.text[:200]}")
+                            if resp.status_code in (400, 404, 429, 500, 503, 504) and idx + 1 < len(models_to_try):
+                                break
+                            raise last_err
+                        data = resp.json()
+                        return data["choices"][0]["message"]["content"].strip()
+                    except ModelUnavailable:
+                        raise
+                    except Exception as e:
+                        # Reset stale keep-alive socket (e.g., after laptop sleep/idle) and retry once
+                        if attempt == 0:
+                            try:
+                                self._http.close()
+                            except Exception:
+                                pass
+                            self._http = self._new_http_client()
                             continue
-                        raise last_err
-                    data = resp.json()
-                    return data["choices"][0]["message"]["content"].strip()
-                except ModelUnavailable:
-                    raise
-                except Exception as e:
-                    raise ModelUnavailable(str(e)) from e
+                        raise ModelUnavailable(str(e)) from e
+                continue
 
             req = urllib.request.Request(
                 self.ENDPOINT,

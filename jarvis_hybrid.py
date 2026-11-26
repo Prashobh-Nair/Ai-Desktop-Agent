@@ -249,7 +249,7 @@ def _speak_edge_tts_ram(
         played_any = False
         with sd.OutputStream(samplerate=24000, channels=1, dtype="float32") as stream:
             while True:
-                item = pcm_q.get(timeout=10.0)
+                item = pcm_q.get(timeout=4.5)
                 if item is None:
                     break
                 played_any = True
@@ -343,6 +343,20 @@ def main() -> None:
     fallback_tts = None  # Lazy-loaded only if Edge TTS fails
     tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     _get_tts_loop()  # Pre-warm asyncio loop for instant TTS
+
+    def _prewarm_connections() -> None:
+        """Warm up DNS + TLS sockets to Groq & Edge TTS in background on startup."""
+        try:
+            if getattr(brain, "groq", None) and getattr(brain.groq, "_http", None):
+                brain.groq._http.get("https://api.groq.com", timeout=2.5)
+        except Exception:
+            pass
+        try:
+            _fetch_edge_tts_pcm("Got it.")
+        except Exception:
+            pass
+
+    threading.Thread(target=_prewarm_connections, daemon=True).start()
 
     stt_mode = "Groq Whisper large-v3-turbo (API) -> Local Whisper" if stt.groq_engine.is_configured else "Local Whisper-Small.en (244M)"
     if getattr(brain, "groq_available", False):
