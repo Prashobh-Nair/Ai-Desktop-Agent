@@ -333,6 +333,11 @@ class GroqWhisperClient:
         self.api_key = (api_key or _load_env_key("GROQ_API_KEY")).strip()
         self.model = model
         self.timeout = timeout
+        try:
+            import httpx
+            self._http = httpx.Client(timeout=self.timeout)
+        except Exception:
+            self._http = None
 
     @property
     def is_configured(self) -> bool:
@@ -385,18 +390,20 @@ class GroqWhisperClient:
         )
         body = b"".join(parts)
 
-        req = urllib.request.Request(
-            self.ENDPOINT,
-            data=body,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "User-Agent": "Jarvis-Desktop-Agent/1.0",
-            },
-        )
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "Jarvis-Desktop-Agent/1.0",
+        }
         t0 = time.time()
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        if self._http is not None:
+            resp = self._http.post(self.ENDPOINT, content=body, headers=headers)
+            resp.raise_for_status()
+            payload = resp.json()
+        else:
+            req = urllib.request.Request(self.ENDPOINT, data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
         latency = time.time() - t0
         return {
             "text": (payload.get("text") or "").strip(),

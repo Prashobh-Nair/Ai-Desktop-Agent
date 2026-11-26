@@ -47,12 +47,12 @@ from src.vision_engine import LocalScreenVision
 from src.whisper_engine import build_hotwords
 
 SAMPLE_RATE = 16000
-CHUNK_SAMPLES = int(SAMPLE_RATE * 0.1)
+CHUNK_SAMPLES = int(SAMPLE_RATE * 0.05)  # 50ms chunks for snappier VAD
 
 
-def calibrate_noise_floor(seconds: float = 0.8) -> float:
+def calibrate_noise_floor(seconds: float = 0.5) -> float:
     frames = []
-    num_chunks = max(3, int(seconds / 0.1))
+    num_chunks = max(3, int(seconds / 0.05))
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=CHUNK_SAMPLES) as stream:
         for _ in range(num_chunks):
             data, _ = stream.read(CHUNK_SAMPLES)
@@ -63,7 +63,7 @@ def calibrate_noise_floor(seconds: float = 0.8) -> float:
 
 def listen_utterance(
     threshold: float,
-    silence_timeout: float = 1.25,
+    silence_timeout: float = 0.55,
     max_seconds: float = 15.0,
     ui_bridge: Optional[JarvisUIBridge] = None,
 ) -> Optional[np.ndarray]:
@@ -103,7 +103,7 @@ def listen_utterance(
             else:
                 speech_chunks.append(chunk)
                 if rms < threshold * 0.75:
-                    silence_elapsed += 0.1
+                    silence_elapsed += 0.05
                 else:
                     silence_elapsed = 0.0
                 if silence_elapsed >= silence_timeout or (time.time() - start_time) >= max_seconds:
@@ -340,7 +340,9 @@ def main() -> None:
     bg_manager = BackgroundTaskManager()
     goal_runner = AutonomousGoalRunner(brain, executor, vision=vision)
     stt = SpeechRecognizer(model_size="small.en")
-    fallback_tts = _init_fallback_tts()
+    fallback_tts = None  # Lazy-loaded only if Edge TTS fails
+    tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    _get_tts_loop()  # Pre-warm asyncio loop for instant TTS
 
     stt_mode = "Groq Whisper large-v3-turbo (API) -> Local Whisper" if stt.groq_engine.is_configured else "Local Whisper-Small.en (244M)"
     if getattr(brain, "groq_available", False):
@@ -425,7 +427,6 @@ def main() -> None:
 
             steps = plan.get("steps") or []
             pre_pcm_future = None
-            tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             if steps:
                 if plan.get("needs_confirmation"):
                     confirm_q = plan.get("clarification_question") or f"{reply} Just say yes to go ahead."
@@ -446,7 +447,6 @@ def main() -> None:
                         reply = "No worries, cancelled."
                         print(f">>> JARVIS : \"{reply}\"")
                         speak_reply(reply, fallback_tts, ui_bridge=ui_bridge)
-                        tts_executor.shutdown(wait=False)
                         continue
 
                 info_actions = {"see_screen", "get_time", "get_date", "web_fetch", "file_op", "git_op", "memory_op", "calendar_op", "run_terminal", "plugin_op"}
@@ -516,11 +516,10 @@ def main() -> None:
                     pre_pcm = pre_pcm_future.result(timeout=4.0)
                 except Exception:
                     pre_pcm = None
-            tts_executor.shutdown(wait=False)
 
             print(f">>> JARVIS : \"{reply}\"")
             speak_reply(reply, fallback_tts, ui_bridge=ui_bridge, precomputed_pcm=pre_pcm)
-            time.sleep(0.2)
+            time.sleep(0.05)
 
         except KeyboardInterrupt:
             print("\nExiting JARVIS.")

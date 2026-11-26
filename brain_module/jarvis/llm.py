@@ -121,6 +121,11 @@ class GroqBrainModel:
         self.api_key = (api_key or os.getenv("GROQ_API_KEY", "")).strip()
         self.model_name = model_name
         self.timeout = timeout
+        try:
+            import httpx
+            self._http = httpx.Client(timeout=self.timeout)
+        except Exception:
+            self._http = None
 
     @property
     def is_configured(self) -> bool:
@@ -169,14 +174,30 @@ class GroqBrainModel:
                 payload["reasoning_effort"] = "low"
             else:
                 payload.pop("reasoning_effort", None)
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "Jarvis-Desktop-Agent/1.0",
+            }
+            if self._http is not None:
+                try:
+                    resp = self._http.post(self.ENDPOINT, json=payload, headers=headers)
+                    if resp.status_code >= 400:
+                        last_err = ModelUnavailable(f"Groq error {resp.status_code} ({model_id}): {resp.text[:200]}")
+                        if resp.status_code in (400, 404, 429, 500, 503, 504) and idx + 1 < len(models_to_try):
+                            continue
+                        raise last_err
+                    data = resp.json()
+                    return data["choices"][0]["message"]["content"].strip()
+                except ModelUnavailable:
+                    raise
+                except Exception as e:
+                    raise ModelUnavailable(str(e)) from e
+
             req = urllib.request.Request(
                 self.ENDPOINT,
                 data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                    "User-Agent": "Jarvis-Desktop-Agent/1.0",
-                },
+                headers=headers,
             )
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:

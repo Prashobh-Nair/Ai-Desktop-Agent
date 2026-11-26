@@ -187,12 +187,14 @@ def _chrome_open_url(url: str, wait_load: bool = True) -> str:
 
     has_existing_window = _focus_chrome_window()
     if has_existing_window:
-        time.sleep(0.12)
+        time.sleep(0.06)
     subprocess.Popen([chrome_exe, url], creationflags=subprocess.DETACHED_PROCESS)
-    time.sleep(0.5 if has_existing_window else 1.5)
-    _focus_chrome_window()
     if wait_load:
-        _chrome_wait_for_page_load(timeout=6.0)
+        time.sleep(0.4 if has_existing_window else 1.2)
+        _focus_chrome_window()
+        _chrome_wait_for_page_load(timeout=4.5)
+    else:
+        time.sleep(0.15 if has_existing_window else 0.5)
     return f"Opened {url} in a new Chrome tab." if has_existing_window else f"Launched Chrome and opened {url}."
 
 
@@ -788,21 +790,21 @@ class ActionExecutor:
             return f"Closed {t} (verified stopped)." if verified else f"Closed {t}."
         return f"{t} is not currently running."
 
-    def open_url(self, url: str) -> str:
+    def open_url(self, url: str, wait_load: bool = False) -> str:
         if not url:
             return "No URL provided."
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
-        return _chrome_open_url(url)
+        return _chrome_open_url(url, wait_load=wait_load)
 
-    def search_web(self, target: str, query: str, in_page: bool = False) -> str:
+    def search_web(self, target: str, query: str, in_page: bool = False, wait_load: bool = False) -> str:
         t = (target or "google").strip().lower()
         if in_page and t in WEB_APPS:
             # Open the site homepage and type into its search bar
             return _chrome_open_url_then_search(WEB_APPS[t], query)
         template = SEARCH_URL_TEMPLATES.get(t, SEARCH_URL_TEMPLATES["google"])
         url = template.format(q=urllib.parse.quote_plus(query or ""))
-        return _chrome_open_url(url)
+        return _chrome_open_url(url, wait_load=wait_load)
 
     def play_media(self, target: str, query: Optional[str]) -> str:
         t = (target or "youtube").strip().lower()
