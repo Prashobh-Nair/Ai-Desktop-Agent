@@ -64,37 +64,54 @@ def _is_chrome_running() -> bool:
 
 def _focus_chrome_window() -> bool:
     """
-    Bring the Chrome window to the foreground.
+    Bring the Google Chrome window to the foreground reliably using AttachThreadInput.
     Returns True if a Chrome window was found and focused.
     """
     user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
     found_hwnd = None
+    fallback_hwnd = None
 
     @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
     def _enum_cb(hwnd, _lparam):
-        nonlocal found_hwnd
-        if found_hwnd is not None:
-            return False
+        nonlocal found_hwnd, fallback_hwnd
         if user32.IsWindowVisible(hwnd):
             length = user32.GetWindowTextLengthW(hwnd)
             if length > 0:
                 buf = ctypes.create_unicode_buffer(length + 1)
                 user32.GetWindowTextW(hwnd, buf, length + 1)
                 title = buf.value.lower()
-                if "google chrome" in title or "chrome" in title:
+                if "google chrome" in title:
                     found_hwnd = hwnd
                     return False
+                if fallback_hwnd is None and "chrome" in title:
+                    fallback_hwnd = hwnd
         return True
 
     user32.EnumWindows(_enum_cb, 0)
-    if found_hwnd:
-        SW_RESTORE = 9
-        if user32.IsIconic(found_hwnd):
-            user32.ShowWindow(found_hwnd, SW_RESTORE)
-        user32.SetForegroundWindow(found_hwnd)
-        time.sleep(0.15)
-        return True
-    return False
+    target_hwnd = found_hwnd or fallback_hwnd
+    if not target_hwnd:
+        return False
+
+    SW_RESTORE = 9
+    if user32.IsIconic(target_hwnd):
+        user32.ShowWindow(target_hwnd, SW_RESTORE)
+
+    fg_hwnd = user32.GetForegroundWindow()
+    if fg_hwnd != target_hwnd:
+        fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+        cur_tid = kernel32.GetCurrentThreadId()
+        attached = False
+        if fg_tid and fg_tid != cur_tid:
+            attached = bool(user32.AttachThreadInput(cur_tid, fg_tid, True))
+        try:
+            user32.BringWindowToTop(target_hwnd)
+            user32.SetForegroundWindow(target_hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(cur_tid, fg_tid, False)
+    time.sleep(0.18)
+    return True
 
 
 def _chrome_press_key(vk: int) -> None:
@@ -235,65 +252,28 @@ def _chrome_open_url_then_search(base_url: str, search_query: str, search_vk_com
         # Use a known keyboard shortcut to focus the site's search bar
         _chrome_press_combo(*search_vk_combo)
         time.sleep(0.3)
+    elif "youtube.com" in base_url.lower() or "google.com" in base_url.lower():
+        # YouTube and Google both focus their search bar on '/'
+        _chrome_type_address("/")
+        time.sleep(0.35)
     else:
-        # Generic: press Tab once to move focus into page content, then
-        # use Ctrl+F-style focus is not reliable, so we just type directly.
-        # For most sites the first Tab from the new-tab-URL-bar lands in page.
-        # Actually for search boxes, clicking is more reliable — do Ctrl+L then
-        # immediately Escape to close address bar and ensure page has focus.
-        _chrome_press_combo(0x11, ord("L"))  # Ctrl+L → address bar
+        # Ensure page content has focus (close address bar if open)
+        _chrome_press_combo(0x11, ord("L"))  # Ctrl+L -> address bar
         time.sleep(0.1)
-        _chrome_press_key(0x1B)              # Escape → page gets focus back
+        _chrome_press_key(0x1B)              # Escape -> page gets focus back
         time.sleep(0.2)
 
     # Type the search query and confirm
     _chrome_type_address(search_query)
-    time.sleep(0.1)
+    time.sleep(0.15)
     _chrome_press_key(0x0D)  # Enter
 
     return f"{result_msg} Searched for '{search_query}'."
 
 
 def _chrome_type_address(text: str) -> None:
-    """Type a URL into the Chrome address bar using SendInput (Unicode)."""
-    user32 = ctypes.windll.user32
-    INPUT_KEYBOARD = 1
-    KEYEVENTF_UNICODE = 0x0004
-    KEYEVENTF_KEYUP = 0x0002
-
-    class _KEYBDINPUT(ctypes.Structure):
-        _fields_ = [
-            ("wVk", ctypes.c_ushort),
-            ("wScan", ctypes.c_ushort),
-            ("dwFlags", ctypes.c_ulong),
-            ("time", ctypes.c_ulong),
-            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
-        ]
-
-    class _INPUT_UNION(ctypes.Union):
-        _fields_ = [("ki", _KEYBDINPUT)]
-
-    class _INPUT(ctypes.Structure):
-        _fields_ = [("type", ctypes.c_ulong), ("union", _INPUT_UNION)]
-
-    extra = ctypes.c_ulong(0)
-    for ch in text:
-        code = ord(ch)
-        for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
-            inp = _INPUT(
-                type=INPUT_KEYBOARD,
-                union=_INPUT_UNION(
-                    ki=_KEYBDINPUT(
-                        wVk=0,
-                        wScan=code,
-                        dwFlags=flags,
-                        time=0,
-                        dwExtraInfo=ctypes.pointer(extra),
-                    )
-                ),
-            )
-            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
-        time.sleep(0.003)
+    """Type text into Chrome using the unified 64-bit-safe SendInput helper."""
+    _type_unicode(text)
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +326,17 @@ except Exception:
     pass
 
 
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", ctypes.c_long),
+        ("dy", ctypes.c_long),
+        ("mouseData", ctypes.c_ulong),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+    ]
+
+
 class _KEYBDINPUT(ctypes.Structure):
     _fields_ = [
         ("wVk", ctypes.c_ushort),
@@ -356,8 +347,16 @@ class _KEYBDINPUT(ctypes.Structure):
     ]
 
 
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", ctypes.c_ulong),
+        ("wParamL", ctypes.c_ushort),
+        ("wParamH", ctypes.c_ushort),
+    ]
+
+
 class _INPUT_UNION(ctypes.Union):
-    _fields_ = [("ki", _KEYBDINPUT)]
+    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT), ("hi", _HARDWAREINPUT)]
 
 
 class _INPUT(ctypes.Structure):
@@ -438,7 +437,8 @@ def _type_unicode(text: str, replace: bool = False, press_enter: bool = False) -
 
     user32 = ctypes.windll.user32
     extra = ctypes.c_ulong(0)
-    for ch in text:
+    cb_size = ctypes.sizeof(_INPUT)
+    for idx, ch in enumerate(text):
         if ch == "\n":
             _press_keys(VK_RETURN)
             continue
@@ -459,7 +459,15 @@ def _type_unicode(text: str, replace: bool = False, press_enter: bool = False) -
                     )
                 ),
             )
-            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
+            sent = user32.SendInput(1, ctypes.byref(inp), cb_size)
+            if sent == 0 and idx == 0:
+                # Fallback to clipboard paste if SendInput is blocked/rejected
+                if _set_clipboard(text):
+                    _press_keys(VK_CONTROL, ord("V"))
+                    time.sleep(0.08)
+                    if press_enter:
+                        _press_keys(VK_RETURN)
+                    return
         time.sleep(0.004)
     if press_enter:
         _press_keys(VK_RETURN)
