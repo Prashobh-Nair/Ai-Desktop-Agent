@@ -838,8 +838,12 @@ class ActionExecutor:
     def close_app(self, target: str) -> str:
         t = (target or "").strip().lower()
         if t in WEB_APPS:
-            _press_keys(*BROWSER_HOTKEYS["close_tab"])
-            return f"Closed current browser tab for {t}."
+            tab_kw = "whatsapp" if "whatsapp" in t else t.replace(" web", "").strip()
+            if _chrome_switch_to_existing_tab(tab_kw):
+                time.sleep(0.08)
+                _press_keys(*BROWSER_HOTKEYS["close_tab"])
+                return f"Closed the {tab_kw.title()} tab in Chrome."
+            return f"Could not find an open {target} tab in Chrome."
 
         exe = CLOSE_PROCESS_MAP.get(t, f"{t}.exe" if not t.endswith(".exe") else t)
         res = subprocess.run(
