@@ -1093,7 +1093,11 @@ class ActionExecutor:
         from PIL import ImageGrab
 
         try:
-            img = ImageGrab.grab()
+            try:
+                img = ImageGrab.grab(all_screens=True)
+            except Exception:
+                from src.vision_engine import LocalScreenVision
+                img = LocalScreenVision().capture_screen(max_width=3840)
             buf = io.BytesIO()
             img.convert("RGB").save(buf, format="BMP")
             dib_data = buf.getvalue()[14:]  # Strip 14-byte BITMAPFILEHEADER for CF_DIB
