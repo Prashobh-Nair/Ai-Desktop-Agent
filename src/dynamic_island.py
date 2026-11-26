@@ -143,6 +143,8 @@ class DynamicIslandOverlay:
         canvas.bind("<ButtonRelease-1>", self._on_release)
         canvas.bind("<Double-Button-1>", self._on_double_click)
 
+        root.withdraw()  # Hidden by default; shown automatically during task execution
+        self._visible = False
         self._tick()
         try:
             root.mainloop()
@@ -237,6 +239,19 @@ class DynamicIslandOverlay:
         self._last_tick = now
 
         snap = self.ui_bridge.snapshot()
+        should_show = bool(snap.get("island_visible", False))
+        if not should_show:
+            if self._visible:
+                self._root.withdraw()
+                self._visible = False
+                self._expanded = False
+            self._root.after(100, self._tick)
+            return
+
+        if not self._visible:
+            self._root.deiconify()
+            self._visible = True
+
         st = (snap.get("state") or "IDLE").upper()
         mic = float(snap.get("mic_level") or 0.0)
         tts = float(snap.get("tts_level") or 0.0)

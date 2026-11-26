@@ -747,6 +747,18 @@ class ActionExecutor:
         if t in WEB_APPS:
             return _chrome_open_url(WEB_APPS[t])
 
+        if t == "chrome":
+            if _focus_chrome_window():
+                return "Focused existing Chrome window."
+            try:
+                chrome_exe = _find_chrome_exe()
+                subprocess.Popen([chrome_exe], creationflags=subprocess.DETACHED_PROCESS)
+                time.sleep(1.0)
+                _focus_chrome_window()
+                return "Launched Chrome."
+            except Exception as e:
+                return f"Failed to open Chrome: {e}"
+
         cmd = DESKTOP_LAUNCH.get(t, t)
         try:
             if cmd.endswith(":"):
@@ -1007,28 +1019,15 @@ class ActionExecutor:
 
             if action == "open_app":
                 t_low = target.lower()
-                # If we have a following search/play step AND the target is a web app,
-                # don't skip — open the site and wait for it to load, then the
-                # search step will type in its search bar (in_page mode).
-                if t_low in WEB_APPS:
-                    if has_play:
-                        # play_media handles full navigation + search, skip bare open
-                        if step_callback is not None:
-                            try:
-                                step_callback(idx, "done", None)
-                            except Exception:
-                                pass
-                        continue
-                    if has_search:
-                        # Open the site and wait — search step will use in_page=True
-                        logs.append(_chrome_open_url(WEB_APPS[t_low], wait_load=True))
-                        last_opened_app = target
-                        if step_callback is not None:
-                            try:
-                                step_callback(idx, "done", None)
-                            except Exception:
-                                pass
-                        continue
+                # Skip opening a blank Chrome window or duplicate site tab if a search/play/open_url step follows
+                if (has_play or has_search) and (t_low in WEB_APPS or t_low == "chrome"):
+                    last_opened_app = target
+                    if step_callback is not None:
+                        try:
+                            step_callback(idx, "done", None)
+                        except Exception:
+                            pass
+                    continue
                 logs.append(self.open_app(target))
                 last_opened_app = target
                 # If followed by interactive steps, wait for window & focus it automatically
@@ -1092,12 +1091,8 @@ class ActionExecutor:
                 if has_play:
                     pending_query = query
                     continue
-                # If the target is a web app that was just opened (open_app + search combo),
-                # type the query into the site's search bar (in_page mode).
-                # Otherwise, use the search URL template directly.
                 t_search = (target or "google").strip().lower()
-                use_in_page = has_search and t_search in WEB_APPS and last_opened_app is not None
-                logs.append(self.search_web(t_search, query, in_page=use_in_page))
+                logs.append(self.search_web(t_search, query, in_page=False))
             elif action == "play":
                 logs.append(self.play_media(target, pending_query or query))
                 pending_query = None

@@ -204,7 +204,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Hybrid JARVIS (API + Local Fallback)")
     parser.add_argument("--text", action="store_true", help="Type commands instead of microphone input")
     parser.add_argument("--no-ui", action="store_true", help="Run without launching the visual UI")
-    parser.add_argument("--full-ui", action="store_true", help="Also open the full JARVIS orb window on startup")
+    parser.add_argument("--no-full-ui", action="store_true", help="Start with only the Dynamic Island (no full orb window)")
     args = parser.parse_args()
 
     print("\n============================================================")
@@ -214,7 +214,7 @@ def main() -> None:
     ui_bridge: Optional[JarvisUIBridge] = None
     if not args.no_ui:
         ui_bridge = JarvisUIBridge()
-        ui_bridge.start(open_window=args.full_ui, start_island=True)
+        ui_bridge.start(open_window=not args.no_full_ui, start_island=True)
 
     brain = Brain(mode="auto")
     vision = LocalScreenVision()
@@ -310,6 +310,10 @@ def main() -> None:
             reply = plan.get("reply") or "Got it."
 
             steps = plan.get("steps") or []
+            if not steps and ui_bridge is not None:
+                # Conversational Q&A: keep full 3D orb UI visible, hide Dynamic Island
+                ui_bridge.set_island_visible(False)
+                ui_bridge.restore_main_window()
             if steps:
                 if plan.get("needs_confirmation"):
                     confirm_q = plan.get("clarification_question") or f"{reply} Just say yes to go ahead."
@@ -389,6 +393,9 @@ def main() -> None:
 
             print(f">>> JARVIS : \"{reply}\"")
             speak_reply(reply, fallback_tts, ui_bridge=ui_bridge)
+            if steps and ui_bridge is not None:
+                # Task + reply complete: hide Dynamic Island cleanly
+                ui_bridge.set_island_visible(False)
             time.sleep(0.2)
 
         except KeyboardInterrupt:

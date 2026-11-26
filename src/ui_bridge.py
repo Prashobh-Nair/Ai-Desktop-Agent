@@ -96,6 +96,7 @@ class JarvisUIBridge:
             "tts_level": 0.0,
             "status_text": "Ready",
             "error_message": "",
+            "island_visible": False,
             "task": {
                 "active": False,
                 "completed": False,
@@ -155,6 +156,11 @@ class JarvisUIBridge:
             self._state["tts_level"] = round(clamped, 3)
             self._bump()
 
+    def set_island_visible(self, visible: bool) -> None:
+        with self._lock:
+            self._state["island_visible"] = bool(visible)
+            self._bump()
+
     def start_task(self, title: str, plan_steps: List[Dict[str, Any]]) -> None:
         steps_ui = [
             {"label": _humanize_step(s), "status": "pending"}
@@ -166,6 +172,7 @@ class JarvisUIBridge:
             self._state["error_message"] = ""
             self._state["mic_level"] = 0.0
             self._state["tts_level"] = 0.0
+            self._state["island_visible"] = True
             self._state["task"] = {
                 "active": True,
                 "completed": False,
@@ -253,8 +260,8 @@ class JarvisUIBridge:
 
         return app
 
-    def start(self, open_window: bool = False, start_island: bool = True) -> None:
-        """Starts the FastAPI server, native Dynamic Island overlay, and optional full UI window."""
+    def start(self, open_window: bool = True, start_island: bool = True) -> None:
+        """Starts the FastAPI server, native Dynamic Island overlay, and full UI window."""
         if self._thread and self._thread.is_alive():
             return
         app = self.build_app()
@@ -299,6 +306,30 @@ class JarvisUIBridge:
                         # Exact title of frontend/index.html is "JARVIS"
                         if buf.value.strip() == "JARVIS":
                             user32.ShowWindow(hwnd, SW_MINIMIZE)
+                return True
+
+            user32.EnumWindows(_cb, 0)
+        except Exception:
+            pass
+
+    def restore_main_window(self) -> None:
+        """Restores the full JARVIS Chrome --app window for conversational Q&A."""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            SW_RESTORE = 9
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            def _cb(hwnd, _lp):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buf = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buf, length + 1)
+                        if buf.value.strip() == "JARVIS" and user32.IsIconic(hwnd):
+                            user32.ShowWindow(hwnd, SW_RESTORE)
                 return True
 
             user32.EnumWindows(_cb, 0)
