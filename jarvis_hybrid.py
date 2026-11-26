@@ -203,7 +203,8 @@ def _init_fallback_tts():
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hybrid JARVIS (API + Local Fallback)")
     parser.add_argument("--text", action="store_true", help="Type commands instead of microphone input")
-    parser.add_argument("--no-ui", action="store_true", help="Run without launching the visual orb frontend")
+    parser.add_argument("--no-ui", action="store_true", help="Run without launching the visual UI")
+    parser.add_argument("--full-ui", action="store_true", help="Also open the full JARVIS orb window on startup")
     args = parser.parse_args()
 
     print("\n============================================================")
@@ -213,7 +214,7 @@ def main() -> None:
     ui_bridge: Optional[JarvisUIBridge] = None
     if not args.no_ui:
         ui_bridge = JarvisUIBridge()
-        ui_bridge.start(open_window=True)
+        ui_bridge.start(open_window=args.full_ui, start_island=True)
 
     brain = Brain(mode="auto")
     vision = LocalScreenVision()
@@ -340,8 +341,9 @@ def main() -> None:
                     plugin_manager=plugin_manager,
                     step_callback=(lambda i, s, l: ui_bridge.update_step(i, s, l)) if ui_bridge is not None else None,
                 )
+                err_outputs = [o for o in (outputs or []) if o and any(k in o.lower() for k in ("could not", "failed", "not found", "unavailable", "screen check:"))]
                 if ui_bridge is not None:
-                    ui_bridge.finish_task()
+                    ui_bridge.finish_task(had_error=bool(err_outputs), error_msg=(" ".join(err_outputs) if err_outputs else ""))
                 if outputs:
                     # Handle on-demand plugin creation / reconnection interactively
                     setup_marker = next((o for o in outputs if o and o.startswith("__SETUP_PLUGIN__:")), None)

@@ -27,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
-VALID_STATES = ("IDLE", "LISTENING", "THINKING", "SPEAKING", "EXECUTING")
+VALID_STATES = ("IDLE", "LISTENING", "THINKING", "SPEAKING", "EXECUTING", "COMPLETED", "ERROR")
 
 
 def _humanize_step(step: Dict[str, Any]) -> str:
@@ -95,6 +95,7 @@ class JarvisUIBridge:
             "mic_level": 0.0,
             "tts_level": 0.0,
             "status_text": "Ready",
+            "error_message": "",
             "task": {
                 "active": False,
                 "completed": False,
@@ -105,6 +106,7 @@ class JarvisUIBridge:
         }
         self._server: Optional[uvicorn.Server] = None
         self._thread: Optional[threading.Thread] = None
+        self._island = None
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -133,8 +135,12 @@ class JarvisUIBridge:
                     "THINKING": "Thinking...",
                     "SPEAKING": "Speaking...",
                     "EXECUTING": "Executing...",
+                    "COMPLETED": "Done",
+                    "ERROR": "Something went wrong",
                 }
                 self._state["status_text"] = defaults.get(st, "Ready")
+            if st != "ERROR":
+                self._state["error_message"] = ""
             self._bump()
 
     def set_mic_level(self, level: float) -> None:
@@ -157,6 +163,7 @@ class JarvisUIBridge:
         with self._lock:
             self._state["state"] = "EXECUTING"
             self._state["status_text"] = "Executing..."
+            self._state["error_message"] = ""
             self._state["mic_level"] = 0.0
             self._state["tts_level"] = 0.0
             self._state["task"] = {
@@ -166,6 +173,8 @@ class JarvisUIBridge:
                 "steps": steps_ui,
             }
             self._bump()
+        # Automatically hide/minimize the main JARVIS window so user's app stays visible
+        self.minimize_main_window()
 
     def update_step(self, index: int, status: str, label: Optional[str] = None) -> None:
         with self._lock:
@@ -176,17 +185,27 @@ class JarvisUIBridge:
                     steps[index]["label"] = label
                 self._bump()
 
-    def finish_task(self, had_error: bool = False) -> None:
+    def finish_task(self, had_error: bool = False, error_msg: str = "") -> None:
         with self._lock:
             self._state["task"]["completed"] = True
             self._state["task"]["active"] = True
+            if had_error:
+                self._state["state"] = "ERROR"
+                self._state["status_text"] = "Error"
+                self._state["error_message"] = (error_msg or "Task failed")[:80]
+            else:
+                self._state["state"] = "COMPLETED"
+                self._state["status_text"] = "Done"
             self._bump()
 
         def _hide_later():
-            time.sleep(2.2)
+            time.sleep(2.0)
             with self._lock:
                 if self._state["task"].get("completed"):
                     self._state["task"]["active"] = False
+                    if self._state["state"] in ("COMPLETED", "ERROR"):
+                        self._state["state"] = "IDLE"
+                        self._state["status_text"] = "Ready"
                     self._bump()
 
         threading.Thread(target=_hide_later, daemon=True).start()
@@ -234,8 +253,8 @@ class JarvisUIBridge:
 
         return app
 
-    def start(self, open_window: bool = True) -> None:
-        """Starts the FastAPI server in a daemon thread and optionally opens Chrome app window."""
+    def start(self, open_window: bool = False, start_island: bool = True) -> None:
+        """Starts the FastAPI server, native Dynamic Island overlay, and optional full UI window."""
         if self._thread and self._thread.is_alive():
             return
         app = self.build_app()
@@ -250,10 +269,41 @@ class JarvisUIBridge:
         self._thread = threading.Thread(target=self._server.run, daemon=True)
         self._thread.start()
 
-        # Wait briefly for server to bind
-        time.sleep(0.35)
+        time.sleep(0.3)
+        if start_island:
+            try:
+                from src.dynamic_island import DynamicIslandOverlay
+                self._island = DynamicIslandOverlay(self)
+                self._island.start()
+            except Exception:
+                self._island = None
         if open_window:
             self.launch_frontend_window()
+
+    def minimize_main_window(self) -> None:
+        """Minimizes the full JARVIS Chrome --app window if open so desktop apps stay visible."""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            SW_MINIMIZE = 6
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            def _cb(hwnd, _lp):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buf = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buf, length + 1)
+                        # Exact title of frontend/index.html is "JARVIS"
+                        if buf.value.strip() == "JARVIS":
+                            user32.ShowWindow(hwnd, SW_MINIMIZE)
+                return True
+
+            user32.EnumWindows(_cb, 0)
+        except Exception:
+            pass
 
     def launch_frontend_window(self) -> None:
         """Opens the JARVIS frontend in a clean frameless Chrome --app window (or browser fallback)."""
@@ -287,5 +337,10 @@ class JarvisUIBridge:
         webbrowser.open(url)
 
     def stop(self) -> None:
+        if self._island is not None:
+            try:
+                self._island.stop()
+            except Exception:
+                pass
         if self._server is not None:
             self._server.should_exit = True
