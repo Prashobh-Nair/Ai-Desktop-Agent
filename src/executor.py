@@ -97,13 +97,73 @@ def _focus_chrome_window() -> bool:
     return False
 
 
-def _chrome_open_url(url: str) -> str:
+def _chrome_press_key(vk: int) -> None:
+    """Single keybd_event press+release for a virtual key code."""
+    u32 = ctypes.windll.user32
+    u32.keybd_event(vk, 0, 0, 0)
+    time.sleep(0.03)
+    u32.keybd_event(vk, 0, 2, 0)
+    time.sleep(0.03)
+
+
+def _chrome_press_combo(*vks: int) -> None:
+    """Press a combination of virtual keys (all down, then all up in reverse)."""
+    u32 = ctypes.windll.user32
+    for vk in vks:
+        u32.keybd_event(vk, 0, 0, 0)
+        time.sleep(0.02)
+    time.sleep(0.04)
+    for vk in reversed(vks):
+        u32.keybd_event(vk, 0, 2, 0)
+        time.sleep(0.02)
+
+
+def _chrome_wait_for_page_load(timeout: float = 5.0) -> None:
     """
-    Open a URL in Chrome.
-    - If Chrome is already running: focus it, open a new tab, navigate there.
-    - If Chrome is not running: launch it with the URL directly.
-    Never opens a new Chrome window for every request.
-    Returns a human-readable result message.
+    Wait for Chrome's page title to stop ending with the loading indicator.
+    Chrome sets the window title to '<page title> - Google Chrome' when loaded,
+    but to '• <partial title> - Google Chrome' or just 'New Tab - Google Chrome'
+    while loading. We poll until the bullet '•' disappears or timeout expires.
+    """
+    user32 = ctypes.windll.user32
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        hwnd_titles: List[str] = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def _cb(hwnd, _lp):
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    t = buf.value.lower()
+                    if "google chrome" in t or "chrome" in t:
+                        hwnd_titles.append(buf.value)
+            return True
+
+        user32.EnumWindows(_cb, 0)
+        # Loading: Chrome shows '•' bullet in title while navigating
+        loading = any("\u2022" in t for t in hwnd_titles)
+        if not loading and hwnd_titles:
+            break
+        time.sleep(0.25)
+
+
+def _chrome_open_url(url: str, wait_load: bool = True) -> str:
+    """
+    Open a URL in Chrome using a new tab in the existing window.
+
+    Flow when Chrome is running:
+      1. Focus Chrome window (SetForegroundWindow + allow OS to settle)
+      2. Ctrl+T  → open new tab          (wait for new-tab page to settle)
+      3. Ctrl+L  → focus address bar     (wait for address bar to get focus)
+      4. Select-all existing text, then type URL via SendInput
+      5. Enter   → navigate
+      6. Optionally wait for the page title to stop showing '•' (loading)
+
+    Flow when Chrome is NOT running:
+      Popen(chrome.exe url) — Chrome opens the URL in its first window.
     """
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
@@ -111,39 +171,87 @@ def _chrome_open_url(url: str) -> str:
     try:
         chrome_exe = _find_chrome_exe()
     except RuntimeError:
-        # Last-resort fallback to system default browser
         webbrowser.open(url)
         return f"Opened {url} (Chrome not found — used default browser)."
 
     if _is_chrome_running():
-        # Chrome is running — focus the window, open a new tab, type the URL
         focused = _focus_chrome_window()
         if focused:
-            time.sleep(0.1)
-            # Open new tab with Ctrl+T
-            ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)        # Ctrl down
-            ctypes.windll.user32.keybd_event(ord("T"), 0, 0, 0)    # T down
-            ctypes.windll.user32.keybd_event(ord("T"), 0, 2, 0)    # T up
-            ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)        # Ctrl up
-            time.sleep(0.3)
-            # Navigate using the address bar (Ctrl+L then type URL and Enter)
-            ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)        # Ctrl down
-            ctypes.windll.user32.keybd_event(ord("L"), 0, 0, 0)    # L down
-            ctypes.windll.user32.keybd_event(ord("L"), 0, 2, 0)    # L up
-            ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)        # Ctrl up
-            time.sleep(0.2)
-            # Type the URL character by character via SendInput
+            time.sleep(0.15)  # Let OS fully transfer focus
+
+            # Step 1: Open new tab
+            _chrome_press_combo(0x11, ord("T"))   # Ctrl+T
+            time.sleep(0.5)   # Wait for new-tab page to render
+
+            # Step 2: Focus address bar (new tabs auto-focus it, but be explicit)
+            _chrome_press_combo(0x11, ord("L"))   # Ctrl+L
+            time.sleep(0.25)  # Let address bar get focus & select existing text
+
+            # Step 3: Clear any existing address bar text and type URL
+            _chrome_press_combo(0x11, ord("A"))   # Ctrl+A — select all
+            time.sleep(0.05)
             _chrome_type_address(url)
             time.sleep(0.1)
-            # Press Enter
-            ctypes.windll.user32.keybd_event(0x0D, 0, 0, 0)
-            ctypes.windll.user32.keybd_event(0x0D, 0, 2, 0)
+
+            # Step 4: Navigate
+            _chrome_press_key(0x0D)               # Enter
+            if wait_load:
+                _chrome_wait_for_page_load(timeout=6.0)
             return f"Opened {url} in a new Chrome tab."
-        # Window focus failed — fall through to subprocess launch with new-tab flag
-    # Chrome not running (or focus failed) → launch it
+
+    # Chrome not running or focus failed → launch fresh
     subprocess.Popen([chrome_exe, url], creationflags=subprocess.DETACHED_PROCESS)
-    time.sleep(0.4)
+    if wait_load:
+        time.sleep(1.5)   # Give Chrome time to start and load
     return f"Launched Chrome and opened {url}."
+
+
+def _chrome_open_url_then_search(base_url: str, search_query: str, search_vk_combo: Optional[Tuple[int, ...]] = None) -> str:
+    """
+    Open a URL in a new Chrome tab, wait for it to load, then type a search query.
+
+    After the page is ready:
+      - If search_vk_combo is provided: press those keys to focus the site's search bar.
+      - Otherwise: click the page body to ensure focus, then type the query.
+      Always presses Enter after typing.
+
+    Used for: 'Open YouTube and search for cats', 'Search Amazon for laptops', etc.
+    """
+    # Open the base page and wait for it to fully load
+    result_msg = _chrome_open_url(base_url, wait_load=True)
+
+    # Give the page an extra moment to become interactive
+    time.sleep(0.6)
+
+    # Ensure Chrome window is still focused after load
+    _focus_chrome_window()
+    time.sleep(0.15)
+
+    # Focus the page content area (Escape dismisses any overlays/auto-complete)
+    _chrome_press_key(0x1B)  # Escape
+    time.sleep(0.1)
+
+    if search_vk_combo:
+        # Use a known keyboard shortcut to focus the site's search bar
+        _chrome_press_combo(*search_vk_combo)
+        time.sleep(0.3)
+    else:
+        # Generic: press Tab once to move focus into page content, then
+        # use Ctrl+F-style focus is not reliable, so we just type directly.
+        # For most sites the first Tab from the new-tab-URL-bar lands in page.
+        # Actually for search boxes, clicking is more reliable — do Ctrl+L then
+        # immediately Escape to close address bar and ensure page has focus.
+        _chrome_press_combo(0x11, ord("L"))  # Ctrl+L → address bar
+        time.sleep(0.1)
+        _chrome_press_key(0x1B)              # Escape → page gets focus back
+        time.sleep(0.2)
+
+    # Type the search query and confirm
+    _chrome_type_address(search_query)
+    time.sleep(0.1)
+    _chrome_press_key(0x0D)  # Enter
+
+    return f"{result_msg} Searched for '{search_query}'."
 
 
 def _chrome_type_address(text: str) -> None:
@@ -694,8 +802,11 @@ class ActionExecutor:
             url = f"https://{url}"
         return _chrome_open_url(url)
 
-    def search_web(self, target: str, query: str) -> str:
+    def search_web(self, target: str, query: str, in_page: bool = False) -> str:
         t = (target or "google").strip().lower()
+        if in_page and t in WEB_APPS:
+            # Open the site homepage and type into its search bar
+            return _chrome_open_url_then_search(WEB_APPS[t], query)
         template = SEARCH_URL_TEMPLATES.get(t, SEARCH_URL_TEMPLATES["google"])
         url = template.format(q=urllib.parse.quote_plus(query or ""))
         return _chrome_open_url(url)
@@ -709,7 +820,10 @@ class ActionExecutor:
         if t == "youtube":
             video_url = self._find_first_youtube_video(query)
             if video_url:
-                return _chrome_open_url(video_url)
+                # Direct video URL — open and wait for page load
+                return _chrome_open_url(video_url, wait_load=True)
+            # Fallback: open YouTube homepage and type the query in its search bar
+            return _chrome_open_url_then_search("https://www.youtube.com", query)
         return self.search_web(t, query)
 
     def control_browser(self, command: str) -> str:
@@ -899,9 +1013,19 @@ class ActionExecutor:
             value = step.get("value") or ""
 
             if action == "open_app":
-                # Skip opening bare web-app homepage if we are about to search/play on it
-                if (has_search or has_play) and target.lower() in WEB_APPS:
-                    continue
+                t_low = target.lower()
+                # If we have a following search/play step AND the target is a web app,
+                # don't skip — open the site and wait for it to load, then the
+                # search step will type in its search bar (in_page mode).
+                if t_low in WEB_APPS:
+                    if has_play:
+                        # play_media handles full navigation + search, skip bare open
+                        continue
+                    if has_search:
+                        # Open the site and wait — search step will use in_page=True
+                        logs.append(_chrome_open_url(WEB_APPS[t_low], wait_load=True))
+                        last_opened_app = target
+                        continue
                 logs.append(self.open_app(target))
                 last_opened_app = target
                 # If followed by interactive steps, wait for window & focus it automatically
@@ -928,8 +1052,7 @@ class ActionExecutor:
                 logs.append(self.close_app(target))
             elif action == "open_url":
                 logs.append(self.open_url(value))
-                if idx + 1 < total:
-                    time.sleep(0.8)
+                # Page load wait is handled inside _chrome_open_url (wait_load=True)
             elif action == "see_screen":
                 if vision is not None:
                     logs.append(vision.analyze_screen(query or "What is on my screen?"))
@@ -966,7 +1089,12 @@ class ActionExecutor:
                 if has_play:
                     pending_query = query
                     continue
-                logs.append(self.search_web(target, query))
+                # If the target is a web app that was just opened (open_app + search combo),
+                # type the query into the site's search bar (in_page mode).
+                # Otherwise, use the search URL template directly.
+                t_search = (target or "google").strip().lower()
+                use_in_page = has_search and t_search in WEB_APPS and last_opened_app is not None
+                logs.append(self.search_web(t_search, query, in_page=use_in_page))
             elif action == "play":
                 logs.append(self.play_media(target, pending_query or query))
                 pending_query = None
