@@ -11,12 +11,15 @@ Strict Microphone Lifecycle (No Wake Word):
 
 import argparse
 import asyncio
+import concurrent.futures
 import io
 import os
 import queue
 import re
 import sys
+import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -109,13 +112,42 @@ def listen_utterance(
     return np.concatenate(speech_chunks) if speech_chunks else None
 
 
-def _speak_edge_tts_ram(
-    text: str,
-    voice: str = "en-IN-PrabhatNeural",
-    rate: str = "+18%",
-    ui_bridge: Optional[JarvisUIBridge] = None,
-) -> bool:
-    """Synthesizes Edge TTS audio in RAM, plays it via sounddevice, and streams live amplitude."""
+_TTS_CACHE: "OrderedDict[str, np.ndarray]" = OrderedDict()
+_TTS_CACHE_LOCK = threading.Lock()
+_TTS_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_TTS_LOOP_LOCK = threading.Lock()
+
+
+def _get_tts_loop() -> asyncio.AbstractEventLoop:
+    """Persistent background asyncio loop so Edge TTS never pays event-loop startup cost."""
+    global _TTS_LOOP
+    with _TTS_LOOP_LOCK:
+        if _TTS_LOOP is None or _TTS_LOOP.is_closed():
+            loop = asyncio.new_event_loop()
+            threading.Thread(target=loop.run_forever, daemon=True).start()
+            _TTS_LOOP = loop
+        return _TTS_LOOP
+
+
+def _decode_mp3_chunk(codec, resampler, raw_bytes: bytes) -> Optional[np.ndarray]:
+    parts = []
+    for pkt in codec.parse(raw_bytes):
+        for frame in codec.decode(pkt):
+            for rf in resampler.resample(frame):
+                arr = rf.to_ndarray().flatten()
+                if len(arr):
+                    parts.append(arr)
+    return np.concatenate(parts).astype(np.float32) if parts else None
+
+
+def _fetch_edge_tts_pcm(text: str, voice: str = "en-IN-PrabhatNeural", rate: str = "+18%") -> Optional[np.ndarray]:
+    """Fetches & decodes full Edge TTS PCM (used for background prefetching during task execution)."""
+    with _TTS_CACHE_LOCK:
+        cached = _TTS_CACHE.get(text)
+        if cached is not None:
+            _TTS_CACHE.move_to_end(text)
+            return cached
+
     async def _fetch() -> bytes:
         comm = edge_tts.Communicate(text, voice, rate=rate)
         buf = io.BytesIO()
@@ -125,9 +157,10 @@ def _speak_edge_tts_ram(
         return buf.getvalue()
 
     try:
-        mp3_bytes = asyncio.run(_fetch())
+        fut = asyncio.run_coroutine_threadsafe(_fetch(), _get_tts_loop())
+        mp3_bytes = fut.result(timeout=12.0)
         if not mp3_bytes:
-            return False
+            return None
         container = av.open(io.BytesIO(mp3_bytes))
         resampler = av.AudioResampler(format="flt", layout="mono", rate=24000)
         pcm_parts = []
@@ -137,26 +170,106 @@ def _speak_edge_tts_ram(
                 if len(arr):
                     pcm_parts.append(arr)
         if not pcm_parts:
-            return False
+            return None
         audio = np.concatenate(pcm_parts).astype(np.float32)
-        sd.play(audio, samplerate=24000, blocking=False)
-        if ui_bridge is not None:
-            hop = int(24000 * 0.033)
-            total_samples = len(audio)
-            t0 = time.perf_counter()
-            while True:
-                elapsed = time.perf_counter() - t0
-                pos = int(elapsed * 24000)
-                if pos >= total_samples:
-                    break
-                seg = audio[pos : min(total_samples, pos + hop)]
-                rms = float(np.sqrt(np.mean(seg ** 2))) if len(seg) else 0.0
-                ui_bridge.set_tts_level(min(1.0, rms * 4.5))
-                time.sleep(0.033)
-            ui_bridge.set_tts_level(0.0)
-        sd.wait()
-        return True
+        if len(text) <= 64:
+            with _TTS_CACHE_LOCK:
+                _TTS_CACHE[text] = audio
+                while len(_TTS_CACHE) > 32:
+                    _TTS_CACHE.popitem(last=False)
+        return audio
     except Exception:
+        return None
+
+
+def _play_pcm_with_ui(audio: np.ndarray, ui_bridge: Optional[JarvisUIBridge] = None) -> None:
+    """Plays pre-decoded PCM audio and streams live RMS amplitude to the UI."""
+    sd.play(audio, samplerate=24000, blocking=False)
+    if ui_bridge is not None:
+        hop = int(24000 * 0.033)
+        total_samples = len(audio)
+        t0 = time.perf_counter()
+        while True:
+            elapsed = time.perf_counter() - t0
+            pos = int(elapsed * 24000)
+            if pos >= total_samples:
+                break
+            seg = audio[pos : min(total_samples, pos + hop)]
+            rms = float(np.sqrt(np.mean(seg ** 2))) if len(seg) else 0.0
+            ui_bridge.set_tts_level(min(1.0, rms * 4.5))
+            time.sleep(0.033)
+        ui_bridge.set_tts_level(0.0)
+    sd.wait()
+
+
+def _speak_edge_tts_ram(
+    text: str,
+    voice: str = "en-IN-PrabhatNeural",
+    rate: str = "+18%",
+    ui_bridge: Optional[JarvisUIBridge] = None,
+    precomputed_pcm: Optional[np.ndarray] = None,
+) -> bool:
+    """Streams Edge TTS chunks directly into sounddevice OutputStream for near-instant playback."""
+    try:
+        if precomputed_pcm is not None:
+            _play_pcm_with_ui(precomputed_pcm, ui_bridge=ui_bridge)
+            return True
+
+        with _TTS_CACHE_LOCK:
+            cached = _TTS_CACHE.get(text)
+            if cached is not None:
+                _TTS_CACHE.move_to_end(text)
+        if cached is not None:
+            _play_pcm_with_ui(cached, ui_bridge=ui_bridge)
+            return True
+
+        pcm_q: "queue.Queue[Optional[np.ndarray]]" = queue.Queue()
+        collected: list = []
+
+        async def _stream_chunks() -> None:
+            codec = av.CodecContext.create("mp3", "r")
+            resampler = av.AudioResampler(format="flt", layout="mono", rate=24000)
+            comm = edge_tts.Communicate(text, voice, rate=rate)
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    pcm = _decode_mp3_chunk(codec, resampler, chunk["data"])
+                    if pcm is not None and len(pcm):
+                        collected.append(pcm)
+                        pcm_q.put(pcm)
+            # Flush remaining decoder frames
+            for frame in codec.decode(None):
+                for rf in resampler.resample(frame):
+                    arr = rf.to_ndarray().flatten().astype(np.float32)
+                    if len(arr):
+                        collected.append(arr)
+                        pcm_q.put(arr)
+            pcm_q.put(None)
+
+        fut = asyncio.run_coroutine_threadsafe(_stream_chunks(), _get_tts_loop())
+        played_any = False
+        with sd.OutputStream(samplerate=24000, channels=1, dtype="float32") as stream:
+            while True:
+                item = pcm_q.get(timeout=10.0)
+                if item is None:
+                    break
+                played_any = True
+                if ui_bridge is not None:
+                    rms = float(np.sqrt(np.mean(item ** 2)))
+                    ui_bridge.set_tts_level(min(1.0, rms * 4.5))
+                stream.write(item.reshape(-1, 1))
+        if ui_bridge is not None:
+            ui_bridge.set_tts_level(0.0)
+        fut.result(timeout=5.0)
+
+        if played_any and len(text) <= 64 and collected:
+            with _TTS_CACHE_LOCK:
+                _TTS_CACHE[text] = np.concatenate(collected).astype(np.float32)
+                while len(_TTS_CACHE) > 32:
+                    _TTS_CACHE.popitem(last=False)
+        return played_any
+    except Exception:
+        if ui_bridge is not None:
+            ui_bridge.set_tts_level(0.0)
         return False
 
 
@@ -164,13 +277,14 @@ def speak_reply(
     text: str,
     fallback_tts=None,
     ui_bridge: Optional[JarvisUIBridge] = None,
+    precomputed_pcm: Optional[np.ndarray] = None,
 ) -> None:
     if not text:
         return
     if ui_bridge is not None:
         ui_bridge.set_state("SPEAKING")
     try:
-        if _speak_edge_tts_ram(text, ui_bridge=ui_bridge):
+        if _speak_edge_tts_ram(text, ui_bridge=ui_bridge, precomputed_pcm=precomputed_pcm):
             return
         if fallback_tts is not None:
             try:
@@ -310,6 +424,8 @@ def main() -> None:
             reply = plan.get("reply") or "Got it."
 
             steps = plan.get("steps") or []
+            pre_pcm_future = None
+            tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             if steps:
                 if plan.get("needs_confirmation"):
                     confirm_q = plan.get("clarification_question") or f"{reply} Just say yes to go ahead."
@@ -330,7 +446,14 @@ def main() -> None:
                         reply = "No worries, cancelled."
                         print(f">>> JARVIS : \"{reply}\"")
                         speak_reply(reply, fallback_tts, ui_bridge=ui_bridge)
+                        tts_executor.shutdown(wait=False)
                         continue
+
+                info_actions = {"see_screen", "get_time", "get_date", "web_fetch", "file_op", "git_op", "memory_op", "calendar_op", "run_terminal", "plugin_op"}
+                has_info_step = any(s.get("action") in info_actions for s in steps)
+                if not has_info_step and reply:
+                    # Pre-synthesize TTS in parallel while desktop/browser task executes
+                    pre_pcm_future = tts_executor.submit(_fetch_edge_tts_pcm, reply)
 
                 if ui_bridge is not None:
                     ui_bridge.start_task(recognized_text, steps)
@@ -387,8 +510,16 @@ def main() -> None:
                             else:
                                 reply = "No worries, we can set it up anytime."
 
+            pre_pcm = None
+            if pre_pcm_future is not None and reply == (plan.get("reply") or "Got it."):
+                try:
+                    pre_pcm = pre_pcm_future.result(timeout=4.0)
+                except Exception:
+                    pre_pcm = None
+            tts_executor.shutdown(wait=False)
+
             print(f">>> JARVIS : \"{reply}\"")
-            speak_reply(reply, fallback_tts, ui_bridge=ui_bridge)
+            speak_reply(reply, fallback_tts, ui_bridge=ui_bridge, precomputed_pcm=pre_pcm)
             time.sleep(0.2)
 
         except KeyboardInterrupt:
