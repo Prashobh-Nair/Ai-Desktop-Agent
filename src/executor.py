@@ -170,10 +170,10 @@ def _chrome_wait_for_page_load(timeout: float = 5.0) -> None:
 def _chrome_open_url(url: str, wait_load: bool = True) -> str:
     """
     Open an exact URL in Google Chrome.
-    - If Chrome is already running: launching `chrome.exe <url>` (without --new-window)
-      natively opens the exact URL in a new tab in the existing Chrome window,
-      avoiding omnibox autocomplete/history redirects.
-    - If Chrome is not running: launches Chrome once with that URL.
+    - If a tabbed Google Chrome window is already open: focuses that window first,
+      then calls `chrome.exe <url>` (without --new-window) so Chrome opens the
+      exact URL in a NEW TAB of that existing window.
+    - If no Chrome window is open: launches Chrome once with that URL.
     Always focuses Chrome and optionally waits for the page to finish loading.
     """
     if not url.startswith(("http://", "https://")):
@@ -185,13 +185,15 @@ def _chrome_open_url(url: str, wait_load: bool = True) -> str:
         webbrowser.open(url)
         return f"Opened {url} (Chrome not found — used default browser)."
 
-    was_running = _is_chrome_running()
+    has_existing_window = _focus_chrome_window()
+    if has_existing_window:
+        time.sleep(0.12)
     subprocess.Popen([chrome_exe, url], creationflags=subprocess.DETACHED_PROCESS)
-    time.sleep(0.5 if was_running else 1.5)
+    time.sleep(0.5 if has_existing_window else 1.5)
     _focus_chrome_window()
     if wait_load:
         _chrome_wait_for_page_load(timeout=6.0)
-    return f"Opened {url} in a new Chrome tab." if was_running else f"Launched Chrome and opened {url}."
+    return f"Opened {url} in a new Chrome tab." if has_existing_window else f"Launched Chrome and opened {url}."
 
 
 def _chrome_open_url_then_search(base_url: str, search_query: str, search_vk_combo: Optional[Tuple[int, ...]] = None) -> str:

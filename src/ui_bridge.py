@@ -268,10 +268,15 @@ class JarvisUIBridge:
 
         if chrome_exe:
             try:
+                ui_profile = PROJECT_ROOT / "memory" / "ui_chrome_profile"
+                ui_profile.mkdir(parents=True, exist_ok=True)
                 subprocess.Popen(
                     [
                         chrome_exe,
                         f"--app={url}",
+                        f"--user-data-dir={ui_profile}",
+                        "--no-first-run",
+                        "--no-default-browser-check",
                         "--window-size=960,720",
                     ],
                     creationflags=subprocess.DETACHED_PROCESS,
