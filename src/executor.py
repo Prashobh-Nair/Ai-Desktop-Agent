@@ -612,6 +612,12 @@ WINDOW_TITLE_ALIASES: Dict[str, Tuple[str, ...]] = {
     "terminal": ("windows powershell", "powershell", "command prompt", "terminal"),
     "paint": ("paint",),
     "calculator": ("calculator",),
+    "youtube": ("youtube",),
+    "whatsapp": ("whatsapp",),
+    "whatsapp web": ("whatsapp",),
+    "gmail": ("gmail",),
+    "chatgpt": ("chatgpt",),
+    "github": ("github",),
 }
 
 
@@ -801,7 +807,7 @@ class ActionExecutor:
                 continue
         return False
 
-    def open_app(self, target: str) -> str:
+    def open_app(self, target: str, wait_load: bool = False) -> str:
         t = (target or "").strip().lower()
         if t in WEB_APPS:
             # Reuse existing tab for stateful web apps (e.g. WhatsApp Web, Gmail, ChatGPT)
@@ -809,7 +815,17 @@ class ActionExecutor:
             if tab_kw in ("whatsapp", "gmail", "chatgpt"):
                 if _chrome_switch_to_existing_tab(tab_kw):
                     return f"Switched to existing {tab_kw.title()} tab in Chrome."
-            return _chrome_open_url(WEB_APPS[t], wait_load=("whatsapp" in t))
+            should_wait = wait_load or ("whatsapp" in t)
+            res = _chrome_open_url(WEB_APPS[t], wait_load=should_wait)
+            if should_wait:
+                # Allow client-side JS (YouTube/WhatsApp React hydration) to finish rendering inputs
+                if "whatsapp" in t:
+                    time.sleep(2.2)
+                elif "youtube" in t:
+                    time.sleep(1.2)
+                else:
+                    time.sleep(0.8)
+            return res
 
         if t == "chrome":
             if _focus_chrome_window():
@@ -1316,6 +1332,8 @@ class ActionExecutor:
         pending_query: Optional[str] = None
         last_opened_app: Optional[str] = None
         last_typed_step: Optional[Dict] = None
+        reused_existing_tab: bool = False
+        waited_for_web_app: bool = False
         total = len(steps)
         for idx, step in enumerate(steps):
             if step_callback is not None:
@@ -1339,10 +1357,17 @@ class ActionExecutor:
                         except Exception:
                             pass
                     continue
-                logs.append(self.open_app(target))
+                has_interactive_next = any(
+                    s.get("action") in ("type_text", "hotkey", "click_element", "mouse", "verify_screen")
+                    for s in steps[idx + 1:]
+                )
+                out_msg = self.open_app(target, wait_load=has_interactive_next)
+                logs.append(out_msg)
                 last_opened_app = target
-                # If followed by interactive steps, wait for window & focus it automatically
-                if idx + 1 < total:
+                reused_existing_tab = "switched to existing" in out_msg.lower()
+                waited_for_web_app = (t_low in WEB_APPS) and has_interactive_next
+                # If followed by interactive desktop steps, wait for window & focus it automatically
+                if idx + 1 < total and t_low not in WEB_APPS:
                     next_act = steps[idx + 1].get("action")
                     if next_act in ("type_text", "hotkey", "click_element", "mouse"):
                         self.wait_for_window(target, timeout=6.0)
@@ -1352,8 +1377,13 @@ class ActionExecutor:
                 logs.append(self.focus_window(target or last_opened_app or ""))
             elif action == "wait":
                 if target:
-                    ok = self.wait_for_window(target, timeout=6.0)
-                    logs.append(f"{target} is ready." if ok else f"Waited for {target}.")
+                    if reused_existing_tab or waited_for_web_app:
+                        logs.append(f"{target} is ready.")
+                    else:
+                        ok = self.wait_for_window(target, timeout=6.0)
+                        if ok and target.strip().lower() in ("whatsapp", "whatsapp web", "youtube"):
+                            time.sleep(1.5 if "whatsapp" in target.lower() else 1.0)
+                        logs.append(f"{target} is ready." if ok else f"Waited for {target}.")
                 else:
                     try:
                         secs = max(0.1, min(10.0, float(value or "1.0")))
@@ -1435,10 +1465,21 @@ class ActionExecutor:
                     logs.append(f"Unknown shortcut: {combo}.")
             elif action == "type_text":
                 v_low = (value or "").strip().lower()
+                prev_click_search = (
+                    idx > 0
+                    and steps[idx - 1].get("action") == "click_element"
+                    and "search" in ((steps[idx - 1].get("query") or "") + " " + (steps[idx - 1].get("target") or "")).lower()
+                )
+                next_is_enter = (
+                    idx + 1 < total
+                    and steps[idx + 1].get("action") == "hotkey"
+                    and "enter" in (steps[idx + 1].get("value") or steps[idx + 1].get("query") or "").lower()
+                )
+                auto_enter = (v_low == "enter") or (prev_click_search and not v_low and not next_is_enter)
                 _type_unicode(
                     query,
                     replace=(v_low == "replace"),
-                    press_enter=(v_low == "enter"),
+                    press_enter=auto_enter,
                 )
                 last_typed_step = step
                 logs.append(f"Typed: '{query}'.")
