@@ -928,8 +928,9 @@ class ActionExecutor:
         chosen_path: Optional[Path] = None
         state_file = wp_dir / ".last_theme.txt"
 
-        generic_terms = {"", "random", "any", "new", "next", "default", "wallpaper", "change", "laptop"}
-        is_generic = q_low in generic_terms
+        generic_words = {"random", "any", "new", "next", "default", "wallpaper", "change", "laptop", "desktop", "my", "the", "a"}
+        words = [w for w in q_low.split() if w]
+        is_generic = (not words) or all(w in generic_words for w in words)
         if is_generic:
             last_theme = state_file.read_text(encoding="utf-8").strip() if state_file.exists() else ""
             pool = [t for t in self.WALLPAPER_THEMES if t != last_theme] or list(self.WALLPAPER_THEMES)
