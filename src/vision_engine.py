@@ -192,19 +192,20 @@ class LocalScreenVision:
             "generationConfig": gen_cfg,
         }).encode("utf-8")
 
-        for model_id in ("gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-flash-lite-latest", "gemini-flash-latest"):
+        for model_id in ("gemini-2.0-flash-lite", "gemini-2.0-flash"):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
-            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
             try:
-                with urllib.request.urlopen(req, timeout=12.0) as resp:
-                    data = json.loads(resp.read())
-                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            except urllib.error.HTTPError as e:
-                if e.code in (404, 429, 500, 503, 504):
+                import httpx
+                with httpx.Client(timeout=httpx.Timeout(6.0, connect=2.5)) as client:
+                    resp = client.post(url, content=body, headers={"Content-Type": "application/json"})
+                if resp.status_code in (404, 429, 500, 503, 504):
                     continue
-                return None
+                if resp.status_code >= 400:
+                    return None
+                data = resp.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
             except Exception:
-                return None
+                continue
         return None
 
     def _analyze_with_gemini(self, img: Image.Image, prompt_text: str) -> Optional[str]:

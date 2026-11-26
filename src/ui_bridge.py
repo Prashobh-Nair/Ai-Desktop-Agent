@@ -315,6 +315,7 @@ class JarvisUIBridge:
                 return True
 
             user32.EnumWindows(_cb, 0)
+            time.sleep(0.12)
         except Exception:
             pass
 
@@ -339,6 +340,7 @@ class JarvisUIBridge:
                 return True
 
             user32.EnumWindows(_cb, 0)
+            time.sleep(0.12)
         except Exception:
             pass
 

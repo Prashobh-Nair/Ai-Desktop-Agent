@@ -1060,15 +1060,31 @@ class ActionExecutor:
         return False
 
     def click_element(self, description: str, click_type: str = "click", vision=None) -> str:
-        """Uses Vision to locate a UI element on screen and clicks it (with 1 retry)."""
-        if vision is None:
-            return "Vision engine is not attached; cannot locate UI element."
-        if not description:
+        """Locates a UI element (via fast app shortcuts or Vision) and clicks/focuses it."""
+        desc_low = (description or "").strip().lower()
+        if not desc_low:
             return "No UI element description provided."
 
+        # Fast, zero-latency keyboard shortcuts for common web-app search boxes
+        if "whatsapp" in desc_low and "search" in desc_low:
+            _focus_chrome_window()
+            time.sleep(0.08)
+            _press_keys(VK_CONTROL, VK_MENU, 0xBF)  # Ctrl+Alt+/ focuses WhatsApp Web search
+            time.sleep(0.15)
+            return "Focused WhatsApp Web search box."
+        if "youtube" in desc_low and "search" in desc_low:
+            _focus_chrome_window()
+            time.sleep(0.08)
+            _type_unicode("/")  # '/' focuses YouTube search
+            time.sleep(0.15)
+            return "Focused YouTube search box."
+
+        if vision is None:
+            return "Vision engine is not attached; cannot locate UI element."
+
         loc = vision.locate_element(description)
-        if not loc.get("found"):
-            time.sleep(0.5)
+        if not loc.get("found") and "unavailable" not in (loc.get("reason") or "").lower():
+            time.sleep(0.4)
             loc = vision.locate_element(description)
         if not loc.get("found"):
             return f"Could not find '{description}' on screen ({loc.get('reason', 'not visible')})."
