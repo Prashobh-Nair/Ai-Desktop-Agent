@@ -273,29 +273,45 @@ def _speak_edge_tts_ram(
         return False
 
 
+def _clean_for_speech(text: str) -> str:
+    """Strips markdown and special symbols so TTS never reads 'asterisk', 'hashtag', etc."""
+    if not text:
+        return ""
+    s = re.sub(r"```[\s\S]*?```", " ", text)
+    s = re.sub(r"`([^`]*)`", r"\1", s)
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
+    s = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", s)
+    s = re.sub(r"(?m)^\s*[-*•+]\s+", "", s)
+    s = s.replace("**", "").replace("__", "").replace("~~", "")
+    s = re.sub(r"[*_`~|>\\^]", " ", s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    return s
+
+
 def speak_reply(
     text: str,
     fallback_tts=None,
     ui_bridge: Optional[JarvisUIBridge] = None,
     precomputed_pcm: Optional[np.ndarray] = None,
 ) -> None:
-    if not text:
+    clean = _clean_for_speech(text)
+    if not clean:
         return
     if ui_bridge is not None:
         ui_bridge.set_state("SPEAKING")
     try:
-        if _speak_edge_tts_ram(text, ui_bridge=ui_bridge, precomputed_pcm=precomputed_pcm):
+        if _speak_edge_tts_ram(clean, ui_bridge=ui_bridge, precomputed_pcm=precomputed_pcm):
             return
         if fallback_tts is not None:
             try:
-                fallback_tts.speak(text)
+                fallback_tts.speak(clean)
                 return
             except Exception:
                 pass
         try:
             import pyttsx3
             eng = pyttsx3.init()
-            eng.say(text)
+            eng.say(clean)
             eng.runAndWait()
         except Exception:
             pass
@@ -467,7 +483,7 @@ def main() -> None:
                 has_info_step = any(s.get("action") in info_actions for s in steps)
                 if not has_info_step and reply:
                     # Pre-synthesize TTS in parallel while desktop/browser task executes
-                    pre_pcm_future = tts_executor.submit(_fetch_edge_tts_pcm, reply)
+                    pre_pcm_future = tts_executor.submit(_fetch_edge_tts_pcm, _clean_for_speech(reply))
 
                 if ui_bridge is not None:
                     ui_bridge.start_task(recognized_text, steps)
