@@ -895,13 +895,27 @@ class ActionExecutor:
         except Exception as e:
             return f"Brightness control failed: {e}"
 
+    WALLPAPER_THEMES: List[str] = [
+        "nature mountains",
+        "cyberpunk neon city",
+        "minimalist abstract",
+        "ocean waves sunset",
+        "deep space galaxy",
+        "autumn forest mist",
+        "sports supercar",
+        "japanese aesthetic",
+        "aurora borealis",
+        "modern architecture",
+    ]
+
     def set_wallpaper(self, query: str = "") -> str:
         """
         Changes the Windows desktop wallpaper.
         Supports:
           1. Local image path or filename in Pictures / Downloads / Desktop / Windows Wallpaper
-          2. Themed online 1080p+ wallpaper via Wallhaven / Picsum (saved to memory/wallpapers/)
-          3. Offline fallback to built-in Windows wallpapers
+          2. 10 rotating curated themes when user asks for a new/random wallpaper
+          3. Any custom theme via Wallhaven 1080p+ API (saved to memory/wallpapers/)
+          4. Offline fallback to built-in Windows wallpapers
         """
         import json as _json
         import random
@@ -912,16 +926,24 @@ class ActionExecutor:
         wp_dir = Path(__file__).resolve().parent.parent / "memory" / "wallpapers"
         wp_dir.mkdir(parents=True, exist_ok=True)
         chosen_path: Optional[Path] = None
+        state_file = wp_dir / ".last_theme.txt"
+
+        generic_terms = {"", "random", "any", "new", "next", "default", "wallpaper", "change", "laptop"}
+        is_generic = q_low in generic_terms
+        if is_generic:
+            last_theme = state_file.read_text(encoding="utf-8").strip() if state_file.exists() else ""
+            pool = [t for t in self.WALLPAPER_THEMES if t != last_theme] or list(self.WALLPAPER_THEMES)
+            q = random.choice(pool)
+            q_low = q.lower()
 
         # 1. Direct file path or matching local image in common folders
-        if q and Path(q).is_file():
+        if not is_generic and Path(q).is_file():
             chosen_path = Path(q).resolve()
-        elif q and q_low not in ("random", "any", "new", "next", "default", "wallpaper"):
+        elif not is_generic:
             search_dirs = [
                 Path.home() / "Pictures",
                 Path.home() / "Downloads",
                 Path.home() / "Desktop",
-                wp_dir,
             ]
             for sdir in search_dirs:
                 if not sdir.exists():
@@ -933,32 +955,30 @@ class ActionExecutor:
                 if chosen_path:
                     break
 
-        # 2. Fetch themed or random 1080p+ wallpaper online
+        # 2. Fetch themed 1080p+ wallpaper online
         if chosen_path is None:
             try:
-                if q and q_low not in ("random", "any", "new", "next", "default", "wallpaper"):
-                    api_url = (
-                        "https://wallhaven.cc/api/v1/search?q="
-                        + urllib.parse.quote(q)
-                        + "&purity=100&atleast=1920x1080&sorting=relevance"
-                    )
-                    req = urllib.request.Request(api_url, headers={"User-Agent": "Jarvis/1.0"})
-                    with urllib.request.urlopen(req, timeout=8) as r:
-                        data = _json.loads(r.read().decode("utf-8", errors="ignore"))
-                    items = data.get("data") or []
-                    if items:
-                        pick = random.choice(items[:min(6, len(items))])
-                        img_url = pick["path"]
-                        ext = Path(urllib.parse.urlparse(img_url).path).suffix or ".jpg"
-                        slug = re.sub(r"[^a-z0-9]+", "_", q_low).strip("_")[:24] or "theme"
-                        out_file = wp_dir / f"{slug}_{int(time.time())}{ext}"
-                        img_req = urllib.request.Request(img_url, headers={"User-Agent": "Jarvis/1.0"})
-                        with urllib.request.urlopen(img_req, timeout=12) as ir:
-                            out_file.write_bytes(ir.read())
-                        chosen_path = out_file.resolve()
+                api_url = (
+                    "https://wallhaven.cc/api/v1/search?q="
+                    + urllib.parse.quote(q)
+                    + "&purity=100&atleast=1920x1080&sorting=random"
+                )
+                req = urllib.request.Request(api_url, headers={"User-Agent": "Jarvis/1.0"})
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    data = _json.loads(r.read().decode("utf-8", errors="ignore"))
+                items = data.get("data") or []
+                if items:
+                    pick = random.choice(items[:min(8, len(items))])
+                    img_url = pick["path"]
+                    ext = Path(urllib.parse.urlparse(img_url).path).suffix or ".jpg"
+                    slug = re.sub(r"[^a-z0-9]+", "_", q_low).strip("_")[:24] or "theme"
+                    out_file = wp_dir / f"{slug}_{int(time.time())}{ext}"
+                    img_req = urllib.request.Request(img_url, headers={"User-Agent": "Jarvis/1.0"})
+                    with urllib.request.urlopen(img_req, timeout=12) as ir:
+                        out_file.write_bytes(ir.read())
+                    chosen_path = out_file.resolve()
 
                 if chosen_path is None:
-                    # Generic high-res random wallpaper via Picsum
                     out_file = wp_dir / f"wallpaper_{int(time.time())}.jpg"
                     req = urllib.request.Request("https://picsum.photos/1920/1080", headers={"User-Agent": "Jarvis/1.0"})
                     with urllib.request.urlopen(req, timeout=10) as r:
@@ -991,8 +1011,11 @@ class ActionExecutor:
             SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
         )
         if ok:
-            label = f"'{q}'" if q else "a new image"
-            return f"Changed desktop wallpaper to {label}."
+            try:
+                state_file.write_text(q, encoding="utf-8")
+            except Exception:
+                pass
+            return f"Changed desktop wallpaper to '{q}'."
         return "Failed to apply desktop wallpaper."
 
     def control_system(self, value: str) -> str:
