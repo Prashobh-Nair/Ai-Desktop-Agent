@@ -39,6 +39,7 @@ class Action(str, Enum):
     PREVIOUS = "previous"
     VOLUME = "volume"          # value = up | down | mute | unmute | max | min | 0..100
     BRIGHTNESS = "brightness"  # value = up | down | max | min | 0..100
+    WALLPAPER = "wallpaper"    # query = theme / description / filename / 'random'
     SYSTEM = "system"          # value = shutdown | restart | sleep | lock
     BROWSER = "browser"        # value = new_tab | close_tab | refresh | back | forward | scroll_down | ...
     TYPE_TEXT = "type_text"    # query = text to type, value = optional "replace" | "enter"

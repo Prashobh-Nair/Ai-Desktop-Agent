@@ -83,6 +83,8 @@ def _humanize_step(step: Dict[str, Any]) -> str:
         return f"Adjusting volume ({value or 'change'})"
     if action == "brightness":
         return f"Adjusting brightness ({value or 'change'})"
+    if action == "wallpaper":
+        return f"Changing wallpaper ({query or 'new'})"
     return f"Executing {action.replace('_', ' ')}"
 
 

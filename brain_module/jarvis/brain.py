@@ -65,6 +65,8 @@ def make_reply(plan: Plan, preserve_llm_reply: bool = False) -> str:
         return f"Volume {first.value}."
     if first.action == Action.BRIGHTNESS:
         return f"Brightness {first.value}."
+    if first.action == Action.WALLPAPER:
+        return f"Changing wallpaper to {first.query}." if first.query else "Changing your wallpaper."
     if first.action == Action.BROWSER:
         labels = {
             "new_tab": "Opening a new tab.",

@@ -895,6 +895,106 @@ class ActionExecutor:
         except Exception as e:
             return f"Brightness control failed: {e}"
 
+    def set_wallpaper(self, query: str = "") -> str:
+        """
+        Changes the Windows desktop wallpaper.
+        Supports:
+          1. Local image path or filename in Pictures / Downloads / Desktop / Windows Wallpaper
+          2. Themed online 1080p+ wallpaper via Wallhaven / Picsum (saved to memory/wallpapers/)
+          3. Offline fallback to built-in Windows wallpapers
+        """
+        import json as _json
+        import random
+        from pathlib import Path
+
+        q = (query or "").strip()
+        q_low = q.lower()
+        wp_dir = Path(__file__).resolve().parent.parent / "memory" / "wallpapers"
+        wp_dir.mkdir(parents=True, exist_ok=True)
+        chosen_path: Optional[Path] = None
+
+        # 1. Direct file path or matching local image in common folders
+        if q and Path(q).is_file():
+            chosen_path = Path(q).resolve()
+        elif q and q_low not in ("random", "any", "new", "next", "default", "wallpaper"):
+            search_dirs = [
+                Path.home() / "Pictures",
+                Path.home() / "Downloads",
+                Path.home() / "Desktop",
+                wp_dir,
+            ]
+            for sdir in search_dirs:
+                if not sdir.exists():
+                    continue
+                for p in sdir.iterdir():
+                    if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp") and q_low in p.stem.lower():
+                        chosen_path = p.resolve()
+                        break
+                if chosen_path:
+                    break
+
+        # 2. Fetch themed or random 1080p+ wallpaper online
+        if chosen_path is None:
+            try:
+                if q and q_low not in ("random", "any", "new", "next", "default", "wallpaper"):
+                    api_url = (
+                        "https://wallhaven.cc/api/v1/search?q="
+                        + urllib.parse.quote(q)
+                        + "&purity=100&atleast=1920x1080&sorting=relevance"
+                    )
+                    req = urllib.request.Request(api_url, headers={"User-Agent": "Jarvis/1.0"})
+                    with urllib.request.urlopen(req, timeout=8) as r:
+                        data = _json.loads(r.read().decode("utf-8", errors="ignore"))
+                    items = data.get("data") or []
+                    if items:
+                        pick = random.choice(items[:min(6, len(items))])
+                        img_url = pick["path"]
+                        ext = Path(urllib.parse.urlparse(img_url).path).suffix or ".jpg"
+                        slug = re.sub(r"[^a-z0-9]+", "_", q_low).strip("_")[:24] or "theme"
+                        out_file = wp_dir / f"{slug}_{int(time.time())}{ext}"
+                        img_req = urllib.request.Request(img_url, headers={"User-Agent": "Jarvis/1.0"})
+                        with urllib.request.urlopen(img_req, timeout=12) as ir:
+                            out_file.write_bytes(ir.read())
+                        chosen_path = out_file.resolve()
+
+                if chosen_path is None:
+                    # Generic high-res random wallpaper via Picsum
+                    out_file = wp_dir / f"wallpaper_{int(time.time())}.jpg"
+                    req = urllib.request.Request("https://picsum.photos/1920/1080", headers={"User-Agent": "Jarvis/1.0"})
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        out_file.write_bytes(r.read())
+                    chosen_path = out_file.resolve()
+            except Exception:
+                chosen_path = None
+
+        # 3. Offline fallback: Windows built-in wallpapers
+        if chosen_path is None:
+            win_wp_root = Path(r"C:\Windows\Web\Wallpaper")
+            candidates: List[Path] = []
+            if win_wp_root.exists():
+                for p in win_wp_root.rglob("*"):
+                    if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                        candidates.append(p)
+            if candidates:
+                chosen_path = random.choice(candidates).resolve()
+
+        if chosen_path is None or not chosen_path.exists():
+            return "Could not find or download a wallpaper image."
+
+        SPI_SETDESKWALLPAPER = 0x0014
+        SPIF_UPDATEINIFILE = 0x01
+        SPIF_SENDCHANGE = 0x02
+        ok = ctypes.windll.user32.SystemParametersInfoW(
+            SPI_SETDESKWALLPAPER,
+            0,
+            str(chosen_path),
+            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
+        )
+        if ok:
+            label = f"'{q}'" if q else "a new image"
+            return f"Changed desktop wallpaper to {label}."
+        return "Failed to apply desktop wallpaper."
+
     def control_system(self, value: str) -> str:
         v = (value or "").strip().lower()
         if v == "lock":
@@ -1156,6 +1256,8 @@ class ActionExecutor:
                 logs.append(self.control_volume(value or query))
             elif action == "brightness":
                 logs.append(self.control_brightness(value or query))
+            elif action == "wallpaper":
+                logs.append(self.set_wallpaper(query or value or target))
             elif action == "hotkey":
                 combo = value or query or target
                 if _press_hotkey(combo):
