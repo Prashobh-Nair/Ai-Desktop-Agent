@@ -169,18 +169,12 @@ def _chrome_wait_for_page_load(timeout: float = 5.0) -> None:
 
 def _chrome_open_url(url: str, wait_load: bool = True) -> str:
     """
-    Open a URL in Chrome using a new tab in the existing window.
-
-    Flow when Chrome is running:
-      1. Focus Chrome window (SetForegroundWindow + allow OS to settle)
-      2. Ctrl+T  → open new tab          (wait for new-tab page to settle)
-      3. Ctrl+L  → focus address bar     (wait for address bar to get focus)
-      4. Select-all existing text, then type URL via SendInput
-      5. Enter   → navigate
-      6. Optionally wait for the page title to stop showing '•' (loading)
-
-    Flow when Chrome is NOT running:
-      Popen(chrome.exe url) — Chrome opens the URL in its first window.
+    Open an exact URL in Google Chrome.
+    - If Chrome is already running: launching `chrome.exe <url>` (without --new-window)
+      natively opens the exact URL in a new tab in the existing Chrome window,
+      avoiding omnibox autocomplete/history redirects.
+    - If Chrome is not running: launches Chrome once with that URL.
+    Always focuses Chrome and optionally waits for the page to finish loading.
     """
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
@@ -191,36 +185,13 @@ def _chrome_open_url(url: str, wait_load: bool = True) -> str:
         webbrowser.open(url)
         return f"Opened {url} (Chrome not found — used default browser)."
 
-    if _is_chrome_running():
-        focused = _focus_chrome_window()
-        if focused:
-            time.sleep(0.15)  # Let OS fully transfer focus
-
-            # Step 1: Open new tab
-            _chrome_press_combo(0x11, ord("T"))   # Ctrl+T
-            time.sleep(0.5)   # Wait for new-tab page to render
-
-            # Step 2: Focus address bar (new tabs auto-focus it, but be explicit)
-            _chrome_press_combo(0x11, ord("L"))   # Ctrl+L
-            time.sleep(0.25)  # Let address bar get focus & select existing text
-
-            # Step 3: Clear any existing address bar text and type URL
-            _chrome_press_combo(0x11, ord("A"))   # Ctrl+A — select all
-            time.sleep(0.05)
-            _chrome_type_address(url)
-            time.sleep(0.1)
-
-            # Step 4: Navigate
-            _chrome_press_key(0x0D)               # Enter
-            if wait_load:
-                _chrome_wait_for_page_load(timeout=6.0)
-            return f"Opened {url} in a new Chrome tab."
-
-    # Chrome not running or focus failed → launch fresh
+    was_running = _is_chrome_running()
     subprocess.Popen([chrome_exe, url], creationflags=subprocess.DETACHED_PROCESS)
+    time.sleep(0.5 if was_running else 1.5)
+    _focus_chrome_window()
     if wait_load:
-        time.sleep(1.5)   # Give Chrome time to start and load
-    return f"Launched Chrome and opened {url}."
+        _chrome_wait_for_page_load(timeout=6.0)
+    return f"Opened {url} in a new Chrome tab." if was_running else f"Launched Chrome and opened {url}."
 
 
 def _chrome_open_url_then_search(base_url: str, search_query: str, search_vk_combo: Optional[Tuple[int, ...]] = None) -> str:
