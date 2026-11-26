@@ -1,16 +1,13 @@
 """
-Native Windows Dynamic Island Floating Overlay for JARVIS.
+Native Windows Dynamic Island Floating Overlay for JARVIS (v2 — PIL Anti-Aliased).
 
 Lightweight, frameless, always-on-top transparent tkinter overlay positioned at
-the bottom-centre of the screen. Reacts in real time to JarvisUIBridge states:
-  IDLE, LISTENING, THINKING, EXECUTING, SPEAKING, COMPLETED, ERROR
+the bottom-centre of the screen. Uses 2x supersampled PIL rendering for crisp,
+anti-aliased rounded glass surfaces, soft shadows, and a miniature 3D glass orb
+with flowing icy-cyan, pearl-white, and vibrant-orange ribbons.
 
-Features:
-  - True pixel-clean rounded pill via Windows -transparentcolor
-  - Does not steal focus from active apps (WS_EX_TOOLWINDOW)
-  - Smoothly animated width/height, mini 3D orb, live mic/TTS waveforms,
-    thinking orbit particles, and task progress bar
-  - Click to expand full task details, click outside to collapse, drag to move
+States:
+  IDLE, LISTENING, THINKING, EXECUTING, SPEAKING, COMPLETED, ERROR
 """
 
 from __future__ import annotations
@@ -22,40 +19,14 @@ import time
 import tkinter as tk
 from typing import Any, Dict, List, Optional, Tuple
 
+from PIL import Image, ImageDraw, ImageTk
+
 
 TRANSPARENT_KEY = "#010101"
 
 
 def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
-
-
-def _draw_rounded_rect(
-    canvas: tk.Canvas,
-    x1: float,
-    y1: float,
-    x2: float,
-    y2: float,
-    r: float,
-    **kwargs,
-) -> int:
-    """Draws a smooth rounded rectangle on a tk.Canvas using a polygon."""
-    r = max(2.0, min(r, (x2 - x1) / 2.0, (y2 - y1) / 2.0))
-    pts = [
-        x1 + r, y1,
-        x2 - r, y1,
-        x2, y1,
-        x2, y1 + r,
-        x2, y2 - r,
-        x2, y2,
-        x2 - r, y2,
-        x1 + r, y2,
-        x1, y2,
-        x1, y2 - r,
-        x1, y1 + r,
-        x1, y1,
-    ]
-    return canvas.create_polygon(pts, smooth=True, splinesteps=24, **kwargs)
 
 
 class DynamicIslandOverlay:
@@ -67,11 +38,11 @@ class DynamicIslandOverlay:
         self._stop_event = threading.Event()
         self._root: Optional[tk.Tk] = None
 
-        # Current & target pill geometry
-        self._cur_w = 204.0
-        self._cur_h = 46.0
+        # Larger, well-proportioned pill geometry
+        self._cur_w = 256.0
+        self._cur_h = 60.0
         self._expanded = False
-        self._custom_pos: Optional[Tuple[int, int]] = None  # (center_x, bottom_y)
+        self._custom_pos: Optional[Tuple[int, int]] = None
 
         # Drag state
         self._drag_start_x = 0
@@ -79,10 +50,12 @@ class DynamicIslandOverlay:
         self._drag_origin_pos: Optional[Tuple[int, int]] = None
         self._moved = False
 
-        # Animation phase
+        # Animation & PIL photo reference
         self._phase = 0.0
         self._last_tick = time.perf_counter()
         self._last_was_pressed = False
+        self._visible = False
+        self._tk_img: Optional[ImageTk.PhotoImage] = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -111,7 +84,6 @@ class DynamicIslandOverlay:
         except Exception:
             pass
 
-        # Prevent taskbar icon & focus stealing
         root.update_idletasks()
         try:
             hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
@@ -128,8 +100,8 @@ class DynamicIslandOverlay:
 
         canvas = tk.Canvas(
             root,
-            width=400,
-            height=300,
+            width=460,
+            height=340,
             bg=TRANSPARENT_KEY,
             highlightthickness=0,
             bd=0,
@@ -137,13 +109,12 @@ class DynamicIslandOverlay:
         canvas.pack(fill=tk.BOTH, expand=True)
         self._canvas = canvas
 
-        # Mouse bindings for click-to-expand and drag-to-move
         canvas.bind("<ButtonPress-1>", self._on_press)
         canvas.bind("<B1-Motion>", self._on_drag)
         canvas.bind("<ButtonRelease-1>", self._on_release)
         canvas.bind("<Double-Button-1>", self._on_double_click)
 
-        root.withdraw()  # Hidden by default; shown automatically during task execution
+        root.withdraw()
         self._visible = False
         self._tick()
         try:
@@ -156,9 +127,7 @@ class DynamicIslandOverlay:
         self._drag_start_y = event.y_root
         self._moved = False
         if self._custom_pos is None:
-            cx = self._screen_w // 2
-            by = self._screen_h - 46
-            self._custom_pos = (cx, by)
+            self._custom_pos = (self._screen_w // 2, self._screen_h - 52)
         self._drag_origin_pos = self._custom_pos
 
     def _on_drag(self, event) -> None:
@@ -167,29 +136,27 @@ class DynamicIslandOverlay:
         if abs(dx) > 4 or abs(dy) > 4:
             self._moved = True
         if self._drag_origin_pos is not None:
-            nx = max(120, min(self._screen_w - 120, self._drag_origin_pos[0] + dx))
-            ny = max(80, min(self._screen_h - 12, self._drag_origin_pos[1] + dy))
+            nx = max(140, min(self._screen_w - 140, self._drag_origin_pos[0] + dx))
+            ny = max(90, min(self._screen_h - 12, self._drag_origin_pos[1] + dy))
             self._custom_pos = (nx, ny)
 
     def _on_release(self, event) -> None:
         if not self._moved:
-            # Check if user clicked the "Full UI" button inside expanded mode
             if self._expanded:
                 items = self._canvas.find_withtag("full_ui_btn")
                 if items:
                     bbox = self._canvas.bbox("full_ui_btn")
                     if bbox and bbox[0] <= event.x <= bbox[2] and bbox[1] <= event.y <= bbox[3]:
                         self._expanded = False
+                        self.ui_bridge.set_island_visible(False)
                         self.ui_bridge.launch_frontend_window()
                         return
             self._expanded = not self._expanded
 
     def _on_double_click(self, _event) -> None:
-        # Reset position back to bottom-centre
         self._custom_pos = None
 
     def _check_click_outside(self, win_x: int, win_y: int, win_w: int, win_h: int) -> None:
-        """Collapses expanded pill when the user clicks anywhere outside its bounds."""
         if not self._expanded:
             return
         try:
@@ -214,21 +181,21 @@ class DynamicIslandOverlay:
 
         if self._expanded:
             n_rows = max(1, min(6, len(steps))) if steps else 1
-            return 368.0, float(92 + n_rows * 24)
+            return 424.0, float(108 + n_rows * 26)
 
         if st == "LISTENING":
-            return 282.0, 50.0
+            return 340.0, 64.0
         if st == "THINKING":
-            return 244.0, 48.0
+            return 292.0, 62.0
         if st == "EXECUTING":
-            return 350.0, 56.0
+            return 410.0, 72.0
         if st == "SPEAKING":
-            return 282.0, 50.0
+            return 340.0, 64.0
         if st == "COMPLETED":
-            return 222.0, 48.0
+            return 272.0, 62.0
         if st == "ERROR":
-            return 320.0, 52.0
-        return 198.0, 46.0
+            return 370.0, 66.0
+        return 256.0, 60.0
 
     def _tick(self) -> None:
         if self._stop_event.is_set() or self._root is None:
@@ -255,14 +222,13 @@ class DynamicIslandOverlay:
         st = (snap.get("state") or "IDLE").upper()
         mic = float(snap.get("mic_level") or 0.0)
         tts = float(snap.get("tts_level") or 0.0)
-        task = snap.get("task") or {}
 
         speed_map = {
             "IDLE": 1.6,
-            "LISTENING": 3.8 + mic * 4.0,
+            "LISTENING": 3.8 + mic * 4.2,
             "THINKING": 4.4,
             "EXECUTING": 4.0,
-            "SPEAKING": 3.8 + tts * 4.5,
+            "SPEAKING": 3.8 + tts * 4.6,
             "COMPLETED": 2.0,
             "ERROR": 2.0,
         }
@@ -276,12 +242,11 @@ class DynamicIslandOverlay:
         w = int(round(self._cur_w))
         h = int(round(self._cur_h))
 
-        # Position at bottom-centre (or custom dragged position)
         if self._custom_pos is not None:
             cx, by = self._custom_pos
         else:
             cx = self._screen_w // 2
-            by = self._screen_h - 52
+            by = self._screen_h - 54
 
         x = max(8, min(self._screen_w - w - 8, cx - w // 2))
         y = max(8, min(self._screen_h - h - 8, by - h))
@@ -292,7 +257,7 @@ class DynamicIslandOverlay:
         self._canvas.config(width=w, height=h)
         self._render_pill(w, h, snap)
 
-        self._root.after(33, self._tick)  # ~30 fps
+        self._root.after(33, self._tick)
 
     def _render_pill(self, w: int, h: int, snap: Dict[str, Any]) -> None:
         c = self._canvas
@@ -305,34 +270,59 @@ class DynamicIslandOverlay:
         task = snap.get("task") or {}
         steps: List[Dict[str, Any]] = task.get("steps") or []
 
-        # Border accent color per state (light theme + soft blue/purple/orange)
-        accent_map = {
-            "IDLE": "#cbdcf6",
-            "LISTENING": "#7dd3fc",
-            "THINKING": "#c4b5fd",
-            "EXECUTING": "#93c5fd",
-            "SPEAKING": "#fdba74",
-            "COMPLETED": "#86efac",
-            "ERROR": "#fca5a5",
-        }
-        border_col = accent_map.get(st, "#cbdcf6")
-        radius = min(24.0, h / 2.0 - 1)
+        # 2x supersampled PIL background + mini 3D orb for ultra-crisp anti-aliased edges
+        S = 2
+        img = Image.new("RGBA", (w * S, h * S), (1, 1, 1, 255))
+        draw = ImageDraw.Draw(img, "RGBA")
 
-        # Outer translucent-style pill body (light pearl glass)
-        _draw_rounded_rect(c, 2, 2, w - 2, h - 2, radius, fill="#f7f9fe", outline=border_col, width=1.6)
-        # Subtle top inner highlight line
-        c.create_line(radius, 3.5, w - radius, 3.5, fill="#ffffff", width=1.2)
+        border_rgba_map = {
+            "IDLE": (186, 214, 248, 255),
+            "LISTENING": (96, 198, 248, 255),
+            "THINKING": (178, 152, 248, 255),
+            "EXECUTING": (118, 182, 252, 255),
+            "SPEAKING": (251, 168, 96, 255),
+            "COMPLETED": (110, 228, 168, 255),
+            "ERROR": (248, 138, 138, 255),
+        }
+        border_col = border_rgba_map.get(st, (186, 214, 248, 255))
+
+        pad = 3 * S
+        rad = min(28 * S, (h * S) // 2 - pad)
+        # Outer luminous rim + pearl-white glass body
+        draw.rounded_rectangle(
+            [pad, pad, w * S - pad, h * S - pad],
+            radius=rad,
+            fill=(246, 249, 254, 255),
+            outline=border_col,
+            width=2 * S,
+        )
+        # Inner top specular highlight
+        draw.rounded_rectangle(
+            [pad + 2 * S, pad + 2 * S, w * S - pad - 2 * S, h * S - pad - 2 * S],
+            radius=max(4, rad - 2 * S),
+            fill=None,
+            outline=(255, 255, 255, 230),
+            width=1 * S,
+        )
+
+        # Mini 3D glass orb drawn in 2x PIL
+        orb_cx = (34 if not self._expanded else 32) * S
+        orb_cy = (h // 2 if not self._expanded else 28) * S
+        self._draw_mini_orb_pil(draw, orb_cx, orb_cy, S, st, mic, tts)
+
+        # Downscale cleanly with LANCZOS and composite onto transparent key
+        img_small = img.resize((w, h), Image.Resampling.LANCZOS)
+        # Ensure exact transparent-key background pixels stay (1,1,1)
+        bg = Image.new("RGB", (w, h), (1, 1, 1))
+        bg.paste(img_small, (0, 0), img_small)
+        self._tk_img = ImageTk.PhotoImage(bg)
+        c.create_image(0, 0, anchor="nw", image=self._tk_img)
 
         if self._expanded:
-            self._render_expanded(c, w, h, snap, st, task, steps)
+            self._render_expanded_text(c, w, h, snap, st, task, steps)
             return
 
-        # --- Compact Pill Mode ---
-        orb_cx = 25.0
-        orb_cy = h / 2.0
-        self._draw_mini_orb(c, orb_cx, orb_cy, st, mic, tts)
-
-        # Activity label
+        # --- Compact Pill Foreground Text & Waveforms ---
         label = status_text
         if st == "EXECUTING" and steps:
             active_step = next((s for s in steps if s.get("status") == "active"), None)
@@ -341,53 +331,52 @@ class DynamicIslandOverlay:
                 label = active_step.get("label") or status_text
             elif task.get("title"):
                 label = task["title"]
-            if len(label) > 28:
-                label = label[:26] + "..."
-            label = f"{label} ({done_cnt}/{len(steps)})"
+            if len(label) > 30:
+                label = label[:28] + "..."
+            label = f"{label}  ({done_cnt}/{len(steps)})"
         elif st == "ERROR":
             err = snap.get("error_message") or status_text
-            label = err[:32] + ("..." if len(err) > 32 else "")
+            label = err[:34] + ("..." if len(err) > 34 else "")
 
-        text_x = 46
+        text_x = 64
+        cy = h / 2.0
         c.create_text(
             text_x,
-            orb_cy - (4 if st == "EXECUTING" and steps else 0),
+            cy - (6 if st == "EXECUTING" and steps else 0),
             text=label,
             anchor="w",
-            font=("Segoe UI", 10, "bold" if st in ("EXECUTING", "LISTENING", "SPEAKING") else "normal"),
-            fill="#162033",
+            font=("Segoe UI", 11, "bold" if st in ("EXECUTING", "LISTENING", "SPEAKING") else "normal"),
+            fill="#141d2f",
         )
 
-        # Right-side waveform for LISTENING / SPEAKING
         if st in ("LISTENING", "SPEAKING"):
             level = mic if st == "LISTENING" else tts
             bar_color = "#0ea5e9" if st == "LISTENING" else "#f97316"
-            bx0 = w - 66
-            for i in range(6):
-                amp = 3.5 + (level * 12.0 + 3.0) * (0.5 + 0.5 * math.sin(self._phase * 1.9 + i * 0.9))
-                amp = max(3.0, min(16.0, amp))
-                bx = bx0 + i * 7
-                c.create_line(bx, orb_cy - amp, bx, orb_cy + amp, fill=bar_color, width=3.0, capstyle=tk.ROUND)
+            bx0 = w - 76
+            for i in range(7):
+                amp = 4.0 + (level * 14.0 + 3.5) * (0.5 + 0.5 * math.sin(self._phase * 2.0 + i * 0.85))
+                amp = max(3.5, min(18.0, amp))
+                bx = bx0 + i * 8
+                c.create_line(bx, cy - amp, bx, cy + amp, fill=bar_color, width=3.2, capstyle=tk.ROUND)
 
-        # Subtle progress bar inside bottom of EXECUTING pill
         elif st == "EXECUTING" and steps:
             done_cnt = sum(1 for s in steps if s.get("status") == "done")
             pct = max(0.12, done_cnt / max(1, len(steps)))
-            bar_x1 = 46
-            bar_x2 = w - 20
-            bar_y = h - 12
-            c.create_line(bar_x1, bar_y, bar_x2, bar_y, fill="#e2e8f0", width=3.5, capstyle=tk.ROUND)
+            bar_x1 = 64
+            bar_x2 = w - 24
+            bar_y = h - 16
+            c.create_line(bar_x1, bar_y, bar_x2, bar_y, fill="#e2e8f0", width=4.0, capstyle=tk.ROUND)
             c.create_line(
                 bar_x1,
                 bar_y,
                 bar_x1 + (bar_x2 - bar_x1) * pct,
                 bar_y,
                 fill="#3b82f6",
-                width=3.5,
+                width=4.0,
                 capstyle=tk.ROUND,
             )
 
-    def _render_expanded(
+    def _render_expanded_text(
         self,
         c: tk.Canvas,
         w: int,
@@ -397,51 +386,47 @@ class DynamicIslandOverlay:
         task: Dict[str, Any],
         steps: List[Dict[str, Any]],
     ) -> None:
-        # Header row
-        self._draw_mini_orb(c, 26, 24, st, float(snap.get("mic_level") or 0.0), float(snap.get("tts_level") or 0.0))
         c.create_text(
-            48,
-            24,
+            60,
+            28,
             text=f"JARVIS  •  {st}",
             anchor="w",
             font=("Segoe UI", 9, "bold"),
             fill="#5a667d",
         )
 
-        # Subtle "Full UI" button on top-right
-        _draw_rounded_rect(c, w - 76, 13, w - 16, 35, 11, fill="#eef4ff", outline="#c7d8f8", width=1.0, tags="full_ui_btn")
+        # Subtle "Full UI" pill button
+        c.create_rectangle(w - 86, 15, w - 18, 39, fill="#eef4ff", outline="#c7d8f8", width=1, tags="full_ui_btn")
         c.create_text(
-            w - 46,
-            24,
+            w - 52,
+            27,
             text="Full UI",
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI", 9, "bold"),
             fill="#2563eb",
             tags="full_ui_btn",
         )
 
-        # Task title or status
         title = task.get("title") or snap.get("status_text") or "Ready for voice command"
-        if len(title) > 44:
-            title = title[:42] + "..."
+        if len(title) > 46:
+            title = title[:44] + "..."
         c.create_text(
-            20,
-            52,
+            24,
+            58,
             text=title,
             anchor="w",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 11, "bold"),
             fill="#141d2f",
         )
 
-        # Step rows
-        y = 78
+        y = 86
         if steps:
             for s in steps[:6]:
                 sst = s.get("status") or "pending"
                 lbl = s.get("label") or ""
-                if len(lbl) > 42:
-                    lbl = lbl[:40] + "..."
+                if len(lbl) > 44:
+                    lbl = lbl[:42] + "..."
                 if sst == "done":
-                    sym, sym_col, txt_col = "✓", "#10b981", "#2c4a3e"
+                    sym, sym_col, txt_col = "✓", "#10b981", "#1f513f"
                 elif sst == "active":
                     sym, sym_col, txt_col = "●", "#0ea5e9", "#141d2f"
                 elif sst == "error":
@@ -449,78 +434,81 @@ class DynamicIslandOverlay:
                 else:
                     sym, sym_col, txt_col = "•", "#94a3b8", "#64748b"
 
-                c.create_text(24, y, text=sym, font=("Segoe UI", 10, "bold"), fill=sym_col)
-                c.create_text(40, y, text=lbl, anchor="w", font=("Segoe UI", 9), fill=txt_col)
-                y += 23
+                c.create_text(28, y, text=sym, font=("Segoe UI", 10, "bold"), fill=sym_col)
+                c.create_text(46, y, text=lbl, anchor="w", font=("Segoe UI", 9), fill=txt_col)
+                y += 25
         else:
-            hint = "Speak naturally — I'm listening." if st == "LISTENING" else "Say a command anytime."
-            c.create_text(20, y, text=hint, anchor="w", font=("Segoe UI", 9), fill="#64748b")
+            hint = "Listening to your voice..." if st == "LISTENING" else "Speak a command anytime."
+            c.create_text(24, y, text=hint, anchor="w", font=("Segoe UI", 9), fill="#64748b")
 
-    def _draw_mini_orb(
+    def _draw_mini_orb_pil(
         self,
-        c: tk.Canvas,
-        cx: float,
-        cy: float,
+        draw: ImageDraw.ImageDraw,
+        cx: int,
+        cy: int,
+        S: int,
         st: str,
         mic: float,
         tts: float,
     ) -> None:
         pulse = 0.0
         if st == "IDLE":
-            pulse = math.sin(self._phase) * 1.1
+            pulse = math.sin(self._phase) * 1.2
         elif st == "LISTENING":
-            pulse = 1.2 + mic * 3.2
+            pulse = 1.5 + mic * 3.8
         elif st == "SPEAKING":
-            pulse = 1.2 + tts * 3.5
+            pulse = 1.5 + tts * 4.2
         elif st in ("THINKING", "EXECUTING"):
-            pulse = 1.0 + math.sin(self._phase * 1.5) * 1.0
+            pulse = 1.2 + math.sin(self._phase * 1.6) * 1.2
 
-        r = 12.0 + pulse * 0.45
+        r = int((18.0 + pulse * 0.55) * S)
 
-        # Outer soft halo
-        halo_col = {
-            "IDLE": "#bae6fd",
-            "LISTENING": "#7dd3fc",
-            "THINKING": "#ddd6fe",
-            "EXECUTING": "#93c5fd",
-            "SPEAKING": "#fed7aa",
-            "COMPLETED": "#bbf7d0",
-            "ERROR": "#fecaca",
-        }.get(st, "#bae6fd")
-        c.create_oval(cx - r - 2.5, cy - r - 2.5, cx + r + 2.5, cy + r + 2.5, fill=halo_col, outline="")
+        halo_map = {
+            "IDLE": (186, 230, 253, 140),
+            "LISTENING": (56, 189, 248, 175),
+            "THINKING": (167, 139, 250, 175),
+            "EXECUTING": (96, 165, 250, 175),
+            "SPEAKING": (251, 146, 60, 175),
+            "COMPLETED": (52, 211, 153, 165),
+            "ERROR": (248, 113, 113, 165),
+        }
+        draw.ellipse([cx - r - 4 * S, cy - r - 4 * S, cx + r + 4 * S, cy + r + 4 * S], fill=halo_map.get(st, (186, 230, 253, 140)))
 
-        # Sapphire optical sphere
-        core_col = "#09254c" if st != "COMPLETED" else "#065f46"
-        if st == "ERROR":
-            core_col = "#7f1d1d"
-        c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=core_col, outline="#e0f2fe", width=1.2)
+        # Sapphire glass core
+        core_col = (8, 34, 72, 255)
+        if st == "COMPLETED":
+            core_col = (6, 95, 70, 255)
+        elif st == "ERROR":
+            core_col = (127, 29, 29, 255)
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=core_col, outline=(224, 242, 254, 255), width=2 * S)
 
-        # Internal animated ribbons (icy cyan + warm orange)
-        ang = self._phase * (1.8 if st == "THINKING" else 0.9)
-        dx = math.cos(ang) * (r * 0.35)
-        dy = math.sin(ang) * (r * 0.28)
-        c.create_oval(
-            cx - r * 0.65 + dx * 0.4,
-            cy - r * 0.55 - dy * 0.3,
-            cx + r * 0.45 + dx * 0.4,
-            cy + r * 0.15 - dy * 0.3,
-            fill="#38bdf8",
-            outline="",
+        # Sweeping internal ribbons (icy cyan + warm orange)
+        ang = self._phase * (1.8 if st == "THINKING" else 0.95)
+        dx = int(math.cos(ang) * (r * 0.25))
+        dy = int(math.sin(ang) * (r * 0.22))
+
+        draw.ellipse(
+            [cx - int(r * 0.72) + dx, cy - int(r * 0.62) - dy, cx + int(r * 0.55) + dx, cy + int(r * 0.18) - dy],
+            fill=(56, 189, 248, 210),
         )
-        c.create_oval(
-            cx - r * 0.35 - dx * 0.4,
-            cy - r * 0.05 + dy * 0.3,
-            cx + r * 0.68 - dx * 0.4,
-            cy + r * 0.62 + dy * 0.3,
-            fill="#fb923c" if st not in ("COMPLETED", "ERROR") else ("#34d399" if st == "COMPLETED" else "#f87171"),
-            outline="",
+        warm_col = (249, 115, 22, 230) if st not in ("COMPLETED", "ERROR") else ((52, 211, 153, 220) if st == "COMPLETED" else (248, 113, 113, 220))
+        draw.ellipse(
+            [cx - int(r * 0.48) - dx, cy - int(r * 0.08) + dy, cx + int(r * 0.75) - dx, cy + int(r * 0.68) + dy],
+            fill=warm_col,
+        )
+        # Pearl white inner veil
+        draw.ellipse(
+            [cx - int(r * 0.52) + dx // 2, cy - int(r * 0.52), cx + int(r * 0.28) + dx // 2, cy - int(r * 0.02)],
+            fill=(240, 249, 255, 200),
+        )
+        # Crisp glass specular highlight
+        draw.ellipse(
+            [cx - int(r * 0.58), cy - int(r * 0.65), cx - int(r * 0.05), cy - int(r * 0.22)],
+            fill=(255, 255, 255, 235),
         )
 
-        # Specular glass highlight
-        c.create_oval(cx - r * 0.58, cy - r * 0.62, cx - r * 0.05, cy - r * 0.22, fill="#ffffff", outline="")
-
-        # Orbiting particle in THINKING state
+        # Orbiting violet particle when THINKING
         if st == "THINKING":
-            px = cx + math.cos(self._phase * 2.4) * (r + 2.0)
-            py = cy + math.sin(self._phase * 2.4) * (r + 2.0)
-            c.create_oval(px - 2.2, py - 2.2, px + 2.2, py + 2.2, fill="#8b5cf6", outline="#ffffff", width=0.6)
+            px = int(cx + math.cos(self._phase * 2.4) * (r + 2 * S))
+            py = int(cy + math.sin(self._phase * 2.4) * (r + 2 * S))
+            draw.ellipse([px - 3 * S, py - 3 * S, px + 3 * S, py + 3 * S], fill=(139, 92, 246, 255), outline=(255, 255, 255, 255), width=1 * S)

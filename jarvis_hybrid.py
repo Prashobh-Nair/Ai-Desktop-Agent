@@ -310,10 +310,6 @@ def main() -> None:
             reply = plan.get("reply") or "Got it."
 
             steps = plan.get("steps") or []
-            if not steps and ui_bridge is not None:
-                # Conversational Q&A: keep full 3D orb UI visible, hide Dynamic Island
-                ui_bridge.set_island_visible(False)
-                ui_bridge.restore_main_window()
             if steps:
                 if plan.get("needs_confirmation"):
                     confirm_q = plan.get("clarification_question") or f"{reply} Just say yes to go ahead."
@@ -393,9 +389,6 @@ def main() -> None:
 
             print(f">>> JARVIS : \"{reply}\"")
             speak_reply(reply, fallback_tts, ui_bridge=ui_bridge)
-            if steps and ui_bridge is not None:
-                # Task + reply complete: hide Dynamic Island cleanly
-                ui_bridge.set_island_visible(False)
             time.sleep(0.2)
 
         except KeyboardInterrupt:
