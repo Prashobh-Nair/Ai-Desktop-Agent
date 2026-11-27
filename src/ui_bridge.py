@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
 import shutil
 import subprocess
 import threading
@@ -23,11 +24,20 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
-VALID_STATES = ("IDLE", "LISTENING", "THINKING", "SPEAKING", "EXECUTING", "COMPLETED", "ERROR")
+VALID_STATES = ("IDLE", "LISTENING", "THINKING", "SPEAKING", "EXECUTING", "COMPLETED", "ERROR", "CLARIFICATION")
+
+
+class _CommandPayload(BaseModel):
+    text: str
+
+
+class _ConfirmPayload(BaseModel):
+    approved: bool
 
 
 def _humanize_step(step: Dict[str, Any]) -> str:
@@ -104,7 +114,13 @@ class JarvisUIBridge:
             "tts_level": 0.0,
             "status_text": "Ready",
             "error_message": "",
+            "recognized_text": "",
+            "reply_text": "",
+            "tts_muted": False,
             "island_visible": False,
+            "confirmation": {"active": False, "question": ""},
+            "services": {"brain": "ready", "stt": "ready", "mic": "ready", "tts": "ready"},
+            "history": [],
             "task": {
                 "active": False,
                 "completed": False,
@@ -113,6 +129,11 @@ class JarvisUIBridge:
             },
             "ts": time.time(),
         }
+        self.command_queue: "queue.Queue[str]" = queue.Queue()
+        self.mic_cancel_event = threading.Event()
+        self.mic_trigger_event = threading.Event()
+        self._confirm_event = threading.Event()
+        self._confirm_result: Optional[bool] = None
         self._server: Optional[uvicorn.Server] = None
         self._thread: Optional[threading.Thread] = None
         self._island = None
@@ -146,11 +167,73 @@ class JarvisUIBridge:
                     "EXECUTING": "Executing...",
                     "COMPLETED": "Done",
                     "ERROR": "Something went wrong",
+                    "CLARIFICATION": "Waiting for your answer...",
                 }
                 self._state["status_text"] = defaults.get(st, "Ready")
             if st != "ERROR":
                 self._state["error_message"] = ""
             self._bump()
+
+    def set_recognized_text(self, text: str) -> None:
+        with self._lock:
+            self._state["recognized_text"] = text
+            self._bump()
+
+    def set_reply_text(self, text: str) -> None:
+        with self._lock:
+            self._state["reply_text"] = text
+            self._bump()
+
+    def add_history(self, role: str, text: str) -> None:
+        if not text:
+            return
+        with self._lock:
+            hist = self._state.setdefault("history", [])
+            hist.append({"role": role, "text": text})
+            if len(hist) > 30:
+                del hist[:-30]
+            self._bump()
+
+    def clear_history(self) -> None:
+        with self._lock:
+            self._state["history"] = []
+            self._bump()
+
+    def set_services(self, **kwargs: str) -> None:
+        with self._lock:
+            self._state["services"].update(kwargs)
+            self._bump()
+
+    def is_tts_muted(self) -> bool:
+        with self._lock:
+            return bool(self._state.get("tts_muted", False))
+
+    def toggle_tts_mute(self) -> bool:
+        with self._lock:
+            self._state["tts_muted"] = not bool(self._state.get("tts_muted", False))
+            self._bump()
+            return self._state["tts_muted"]
+
+    def begin_confirmation(self, question: str) -> None:
+        self._confirm_event.clear()
+        self._confirm_result = None
+        with self._lock:
+            self._state["state"] = "CLARIFICATION"
+            self._state["status_text"] = "Confirmation needed"
+            self._state["confirmation"] = {"active": True, "question": question}
+            self._bump()
+
+    def resolve_confirmation(self, approved: bool) -> None:
+        self._confirm_result = bool(approved)
+        self._confirm_event.set()
+        with self._lock:
+            self._state["confirmation"] = {"active": False, "question": ""}
+            self._bump()
+
+    def poll_confirmation(self, timeout: float = 0.1) -> Optional[bool]:
+        if self._confirm_event.wait(timeout=timeout):
+            return self._confirm_result
+        return None
 
     def set_mic_level(self, level: float) -> None:
         clamped = max(0.0, min(1.0, float(level)))
@@ -235,6 +318,44 @@ class JarvisUIBridge:
         @app.get("/state")
         async def get_state():
             return self.snapshot()
+
+        @app.post("/command")
+        async def post_command(payload: _CommandPayload):
+            txt = (payload.text or "").strip()
+            if not txt:
+                return {"ok": False, "error": "Empty command"}
+            self.command_queue.put(txt)
+            self.mic_cancel_event.set()
+            return {"ok": True}
+
+        @app.post("/confirm")
+        async def post_confirm(payload: _ConfirmPayload):
+            self.resolve_confirmation(payload.approved)
+            self.mic_cancel_event.set()
+            return {"ok": True, "approved": payload.approved}
+
+        @app.post("/mic/toggle")
+        async def post_mic_toggle():
+            if self._state.get("state") == "LISTENING":
+                self.mic_cancel_event.set()
+            else:
+                self.mic_trigger_event.set()
+            return {"ok": True}
+
+        @app.post("/tts/mute")
+        async def post_tts_mute():
+            muted = self.toggle_tts_mute()
+            return {"ok": True, "muted": muted}
+
+        @app.post("/history/clear")
+        async def post_history_clear():
+            self.clear_history()
+            return {"ok": True}
+
+        @app.post("/window/minimize")
+        async def post_window_minimize():
+            self.minimize_main_window()
+            return {"ok": True}
 
         @app.get("/events")
         async def sse_events():

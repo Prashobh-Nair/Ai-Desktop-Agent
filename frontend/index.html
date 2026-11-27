@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,45 +7,139 @@
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <!-- Subtle ambient light field (pearl white + icy cyan + warm peach) -->
-  <div class="ambient-bg" aria-hidden="true">
-    <div class="ambient-blob blob-cyan"></div>
-    <div class="ambient-blob blob-orange"></div>
-    <div class="ambient-blob blob-violet"></div>
-  </div>
-
-  <!-- Minimal top-left identity mark -->
-  <header class="brand-mark">
-    <span class="brand-dot" id="brand-dot"></span>
-    <span class="brand-name">JARVIS</span>
-  </header>
-
-  <!-- Central Voice-First Stage -->
-  <main class="stage">
-    <div class="orb-wrap" id="orb-wrap">
-      <canvas id="jarvis-orb" width="560" height="560"></canvas>
+  <main class="assistant-shell" role="main" aria-label="Jarvis Assistant">
+    <!-- Top-right minimal utility controls (theme + collapse) -->
+    <div class="top-controls">
+      <div class="service-status" id="service-status" title="Service readiness" aria-live="polite">
+        <span class="svc-dot" id="svc-dot"></span>
+        <span class="svc-text" id="svc-text">Ready</span>
+      </div>
+      <div class="top-actions">
+        <button
+          type="button"
+          class="icon-btn"
+          id="theme-btn"
+          aria-label="Switch color theme"
+          title="Switch Dark / Light theme"
+        >
+          <span id="theme-icon" aria-hidden="true">&#9788;</span>
+        </button>
+        <button
+          type="button"
+          class="icon-btn"
+          id="collapse-btn"
+          aria-label="Minimize window"
+          title="Minimize to background"
+        >
+          <span aria-hidden="true">&#8211;</span>
+        </button>
+      </div>
     </div>
 
-    <div class="state-pill" id="state-pill">
-      <span class="state-dot" id="state-dot"></span>
-      <span class="state-label" id="state-label">Ready</span>
-    </div>
+    <!-- Central Interactive Orb -->
+    <section class="orb-section">
+      <button
+        type="button"
+        class="orb-btn"
+        id="orb-btn"
+        aria-label="Toggle voice listening"
+        title="Click to start or stop listening"
+      >
+        <canvas id="jarvis-orb" width="440" height="440"></canvas>
+      </button>
+
+      <p class="status-line" id="status-line" aria-live="polite">Ready</p>
+    </section>
+
+    <!-- Recognized Command & Selectable Response -->
+    <section class="response-area" aria-live="polite">
+      <p class="recognized-text" id="recognized-text" hidden></p>
+      <div class="reply-text" id="reply-text" tabindex="0"></div>
+      <p class="error-banner" id="error-banner" role="alert" hidden></p>
+    </section>
+
+    <!-- Confirmation Controls (shown only when Brain requires confirmation) -->
+    <section class="confirm-bar" id="confirm-bar" role="region" aria-label="Action confirmation" hidden>
+      <p class="confirm-question" id="confirm-question"></p>
+      <div class="confirm-actions">
+        <button type="button" class="pill-btn primary" id="confirm-yes">Confirm</button>
+        <button type="button" class="pill-btn secondary" id="confirm-no">Cancel</button>
+      </div>
+    </section>
+
+    <!-- Lightweight Scrollable History (toggleable) -->
+    <section class="history-panel" id="history-panel" aria-label="Conversation history" hidden>
+      <div class="history-header">
+        <span class="history-title">Recent</span>
+        <div class="history-actions">
+          <button type="button" class="text-btn" id="history-undo" hidden>Undo</button>
+          <button type="button" class="text-btn" id="history-clear">Clear</button>
+        </div>
+      </div>
+      <ul class="history-list" id="history-list"></ul>
+    </section>
+
+    <!-- Hidden-until-clicked Typed Input -->
+    <form class="composer" id="composer" hidden>
+      <textarea
+        id="text-input"
+        rows="1"
+        placeholder="Type a command or question... (Enter to send, Shift+Enter for newline)"
+        aria-label="Command or message input"
+      ></textarea>
+      <button type="submit" class="pill-btn primary" id="send-btn" aria-label="Send command">Send</button>
+    </form>
+
+    <!-- Minimal Bottom Control Bar -->
+    <nav class="control-bar" aria-label="Assistant controls">
+      <button
+        type="button"
+        class="control-btn"
+        id="mic-btn"
+        aria-label="Start or stop microphone"
+        title="Microphone (click to talk or stop)"
+      >
+        <span aria-hidden="true">&#127908;</span>
+        <span class="btn-label" id="mic-label">Mic</span>
+      </button>
+
+      <button
+        type="button"
+        class="control-btn"
+        id="type-btn"
+        aria-label="Show text input"
+        aria-expanded="false"
+        title="Type a command"
+      >
+        <span aria-hidden="true">&#9000;</span>
+        <span class="btn-label">Type</span>
+      </button>
+
+      <button
+        type="button"
+        class="control-btn"
+        id="mute-btn"
+        aria-label="Mute or unmute voice output"
+        aria-pressed="false"
+        title="Mute / Unmute TTS"
+      >
+        <span id="mute-icon" aria-hidden="true">&#128266;</span>
+        <span class="btn-label" id="mute-label">Voice</span>
+      </button>
+
+      <button
+        type="button"
+        class="control-btn"
+        id="history-btn"
+        aria-label="Toggle recent history"
+        aria-expanded="false"
+        title="Recent history"
+      >
+        <span aria-hidden="true">&#9776;</span>
+        <span class="btn-label">History</span>
+      </button>
+    </nav>
   </main>
-
-  <!-- Gemini-Style Floating Task Execution Popup (hidden when idle) -->
-  <aside class="task-popup" id="task-popup" aria-live="polite" aria-hidden="true">
-    <div class="task-header">
-      <span class="task-badge-dot" id="task-badge-dot"></span>
-      <span class="task-header-title" id="task-header-title">JARVIS &mdash; EXECUTING</span>
-    </div>
-
-    <div class="task-current" id="task-current"></div>
-
-    <div class="task-progress-wrap">
-      <div class="task-progress-label">Progress</div>
-      <ul class="task-steps" id="task-steps"></ul>
-    </div>
-  </aside>
 
   <script src="/static/orb.js"></script>
   <script src="/static/app.js"></script>

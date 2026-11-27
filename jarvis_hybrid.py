@@ -81,8 +81,11 @@ def listen_utterance(
 
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=CHUNK_SAMPLES, callback=_callback):
         while True:
+            if ui_bridge is not None and ui_bridge.mic_cancel_event.is_set():
+                ui_bridge.mic_cancel_event.clear()
+                return None
             try:
-                chunk = q_audio.get(timeout=0.5).flatten()
+                chunk = q_audio.get(timeout=0.15).flatten()
             except queue.Empty:
                 continue
 
@@ -298,6 +301,10 @@ def speak_reply(
     if not clean:
         return
     if ui_bridge is not None:
+        ui_bridge.set_reply_text(clean)
+        if ui_bridge.is_tts_muted():
+            ui_bridge.set_state("IDLE")
+            return
         ui_bridge.set_state("SPEAKING")
     try:
         if _speak_edge_tts_ram(clean, ui_bridge=ui_bridge, precomputed_pcm=precomputed_pcm):
@@ -393,11 +400,26 @@ def main() -> None:
         threshold = calibrate_noise_floor()
         print(f"Ready (mic threshold={threshold:.4f}). Speak anytime; say 'exit' to quit.\n", flush=True)
 
+    if ui_bridge is not None:
+        brain_ready = "ready" if (getattr(brain, "groq_available", False) or brain.gemini_available or brain.ollama_available) else "unavailable"
+        ui_bridge.set_services(brain=brain_ready, stt="ready", mic="unavailable" if args.text else "ready", tts="ready")
+
     turn = 0
     while True:
         turn += 1
         try:
-            if args.text:
+            typed_from_ui = None
+            if ui_bridge is not None:
+                try:
+                    typed_from_ui = ui_bridge.command_queue.get_nowait()
+                except queue.Empty:
+                    typed_from_ui = None
+
+            if typed_from_ui:
+                recognized_text = typed_from_ui
+                ui_bridge.set_state("THINKING")
+                print(f">>> YOU    : \"{recognized_text}\"")
+            elif args.text:
                 if ui_bridge is not None:
                     ui_bridge.set_state("IDLE")
                 recognized_text = input(f"[TURN #{turn}] YOU > ").strip()
@@ -408,29 +430,45 @@ def main() -> None:
             else:
                 print(f"\n[TURN #{turn} | MIC ON] Listening...", flush=True)
                 if ui_bridge is not None:
+                    ui_bridge.mic_cancel_event.clear()
                     ui_bridge.set_state("LISTENING")
                 audio = listen_utterance(threshold, ui_bridge=ui_bridge)
-                print("[MIC OFF] Processing...", flush=True)
+                # If a typed command arrived from the UI while mic was listening, use it immediately
                 if ui_bridge is not None:
+                    try:
+                        typed_from_ui = ui_bridge.command_queue.get_nowait()
+                    except queue.Empty:
+                        typed_from_ui = None
+                if typed_from_ui:
+                    recognized_text = typed_from_ui
                     ui_bridge.set_state("THINKING")
-                if audio is None or len(audio) < 2400:
+                    print(f">>> YOU    : \"{recognized_text}\"")
+                else:
+                    print("[MIC OFF] Processing...", flush=True)
                     if ui_bridge is not None:
-                        ui_bridge.set_state("IDLE")
-                    continue
+                        ui_bridge.set_state("THINKING")
+                    if audio is None or len(audio) < 2400:
+                        if ui_bridge is not None:
+                            ui_bridge.set_state("IDLE")
+                        continue
 
-                mem_terms = []
-                try:
-                    for item in brain.memory._load_long_term():
-                        mem_terms.extend(re.findall(r"\b[A-Z][a-zA-Z0-9_-]{2,}\b", item.get("fact", "")))
-                except Exception:
-                    pass
-                res = stt.transcribe_with_metadata(audio, hotwords=build_hotwords(mem_terms))
-                recognized_text = res["text"].strip()
-                if not recognized_text:
-                    if ui_bridge is not None:
-                        ui_bridge.set_state("IDLE")
-                    continue
-                print(f">>> YOU    : \"{recognized_text}\"")
+                    mem_terms = []
+                    try:
+                        for item in brain.memory._load_long_term():
+                            mem_terms.extend(re.findall(r"\b[A-Z][a-zA-Z0-9_-]{2,}\b", item.get("fact", "")))
+                    except Exception:
+                        pass
+                    res = stt.transcribe_with_metadata(audio, hotwords=build_hotwords(mem_terms))
+                    recognized_text = res["text"].strip()
+                    if not recognized_text:
+                        if ui_bridge is not None:
+                            ui_bridge.set_state("IDLE")
+                        continue
+                    print(f">>> YOU    : \"{recognized_text}\"")
+
+            if ui_bridge is not None:
+                ui_bridge.set_recognized_text(recognized_text)
+                ui_bridge.add_history("user", recognized_text)
 
             lower_cmd = recognized_text.lower().strip(".,!? ")
             if lower_cmd in ("exit", "quit", "bye jarvis", "goodbye", "shut down jarvis"):
@@ -461,21 +499,33 @@ def main() -> None:
                 if plan.get("needs_confirmation"):
                     confirm_q = plan.get("clarification_question") or f"{reply} Just say yes to go ahead."
                     print(f">>> JARVIS : \"{confirm_q}\"")
+                    if ui_bridge is not None:
+                        ui_bridge.begin_confirmation(confirm_q)
                     speak_reply(confirm_q, fallback_tts, ui_bridge=ui_bridge)
+                    approved = None
                     if args.text:
                         ans = input("Confirm (yes/no) > ").strip().lower()
+                        approved = any(w in ans for w in ("yes", "yeah", "confirm", "sure", "ok", "okay", "do it", "proceed"))
                     else:
                         print("[MIC ON] Waiting for confirmation...", flush=True)
                         if ui_bridge is not None:
-                            ui_bridge.set_state("LISTENING")
-                        c_audio = listen_utterance(threshold, silence_timeout=1.0, max_seconds=6.0, ui_bridge=ui_bridge)
+                            ui_bridge.mic_cancel_event.clear()
+                            ui_bridge.set_state("CLARIFICATION")
+                        c_audio = listen_utterance(threshold, silence_timeout=0.8, max_seconds=6.0, ui_bridge=ui_bridge)
                         print("[MIC OFF]", flush=True)
                         if ui_bridge is not None:
+                            approved = ui_bridge.poll_confirmation(timeout=0.05)
                             ui_bridge.set_state("THINKING")
-                        ans = stt.transcribe_with_metadata(c_audio)["text"].lower() if c_audio is not None and len(c_audio) >= 1600 else ""
-                    if not any(w in ans for w in ("yes", "yeah", "confirm", "sure", "ok", "okay", "do it", "proceed")):
+                        if approved is None:
+                            ans = stt.transcribe_with_metadata(c_audio)["text"].lower() if c_audio is not None and len(c_audio) >= 1600 else ""
+                            approved = any(w in ans for w in ("yes", "yeah", "confirm", "sure", "ok", "okay", "do it", "proceed"))
+                    if ui_bridge is not None:
+                        ui_bridge.resolve_confirmation(bool(approved))
+                    if not approved:
                         reply = "No worries, cancelled."
                         print(f">>> JARVIS : \"{reply}\"")
+                        if ui_bridge is not None:
+                            ui_bridge.add_history("assistant", reply)
                         speak_reply(reply, fallback_tts, ui_bridge=ui_bridge)
                         continue
 
@@ -548,6 +598,8 @@ def main() -> None:
                     pre_pcm = None
 
             print(f">>> JARVIS : \"{reply}\"")
+            if ui_bridge is not None:
+                ui_bridge.add_history("assistant", reply)
             speak_reply(reply, fallback_tts, ui_bridge=ui_bridge, precomputed_pcm=pre_pcm)
             time.sleep(0.05)
 

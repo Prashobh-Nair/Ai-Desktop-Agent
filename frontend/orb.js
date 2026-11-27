@@ -1,10 +1,7 @@
 /**
- * JARVIS 3D Translucent Glass Sphere & Sculpted Energy Ribbons (v2)
- * High-craft 2D Canvas 3D-illusion renderer inspired by the reference orb:
- *  - Deep sapphire-navy optical core for true volumetric depth
- *  - Multi-layered 3D-shaded sweeping crescent ribbons (icy cyan, pearl white, vibrant orange)
- *  - Double-walled Fresnel glass shell with chromatic rim dispersion & specular highlights
- *  - Subtle cursor parallax + 5 fluid backend-driven states
+ * JARVIS Original Dark Glassy Sphere Orb
+ * Dark obsidian glass sphere with a restrained, luminous flowing band inside
+ * (teal, blue, violet, and warm amber). Respects prefers-reduced-motion.
  */
 
 class JarvisOrb {
@@ -13,7 +10,7 @@ class JarvisOrb {
     this.ctx = canvas.getContext("2d", { alpha: true });
 
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.logicalSize = 560;
+    this.logicalSize = 440;
     this.canvas.width = this.logicalSize * this.dpr;
     this.canvas.height = this.logicalSize * this.dpr;
     this.ctx.scale(this.dpr, this.dpr);
@@ -22,25 +19,22 @@ class JarvisOrb {
     this.micLevel = 0;
     this.ttsLevel = 0;
 
-    // Subtle pointer parallax (-1..1)
-    this.pointer = { x: 0, y: 0, tx: 0, ty: 0 };
-    window.addEventListener("pointermove", (e) => {
-      const nx = (e.clientX / Math.max(1, window.innerWidth)) * 2 - 1;
-      const ny = (e.clientY / Math.max(1, window.innerHeight)) * 2 - 1;
-      this.pointer.tx = Math.max(-1, Math.min(1, nx));
-      this.pointer.ty = Math.max(-1, Math.min(1, ny));
+    this._reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    this.reducedMotion = this._reducedMotionQuery.matches;
+    this._reducedMotionQuery.addEventListener("change", (e) => {
+      this.reducedMotion = e.matches;
+      if (this.reducedMotion) this.render(0);
     });
 
     this.anim = {
-      speed: 0.45,
-      swirl: 0.14,
-      breathAmp: 0.016,
+      speed: 0.35,
       scale: 1.0,
-      cyanBoost: 0.85,
-      orangeBoost: 0.92,
-      violetBoost: 0.14,
-      glowAlpha: 0.34,
-      ribbonSpread: 1.0,
+      bandAmp: 0.14,
+      glow: 0.28,
+      teal: 0.85,
+      violet: 0.55,
+      amber: 0.72,
+      errorMix: 0.0,
     };
 
     this.phase = 0;
@@ -52,6 +46,9 @@ class JarvisOrb {
     this.state = (state || "IDLE").toUpperCase();
     this.micLevel = Math.max(0, Math.min(1, micLevel || 0));
     this.ttsLevel = Math.max(0, Math.min(1, ttsLevel || 0));
+    if (this.reducedMotion) {
+      this.render(0);
+    }
   }
 
   start() {
@@ -59,10 +56,13 @@ class JarvisOrb {
     const loop = (now) => {
       const dt = Math.min(0.05, (now - this.lastTime) / 1000);
       this.lastTime = now;
-      this.update(dt);
-      this.render(now / 1000);
+      if (!this.reducedMotion) {
+        this.update(dt);
+        this.render(now / 1000);
+      }
       this._raf = requestAnimationFrame(loop);
     };
+    this.render(0);
     this._raf = requestAnimationFrame(loop);
   }
 
@@ -74,65 +74,65 @@ class JarvisOrb {
   }
 
   update(dt) {
-    let tSpeed = 0.45;
-    let tSwirl = 0.12;
-    let tBreath = 0.016;
+    let tSpeed = 0.35;
     let tScale = 1.0;
-    let tCyan = 0.85;
-    let tOrange = 0.92;
-    let tViolet = 0.12;
-    let tGlow = 0.34;
-    let tSpread = 1.0;
+    let tBand = 0.14;
+    let tGlow = 0.26;
+    let tTeal = 0.85;
+    let tViolet = 0.55;
+    let tAmber = 0.72;
+    let tError = 0.0;
 
     switch (this.state) {
       case "LISTENING": {
         const m = this.micLevel;
-        tSpeed = 0.95 + m * 2.3;
-        tSwirl = 0.22 + m * 0.42;
-        tBreath = 0.02 + m * 0.055;
-        tScale = 1.02 + m * 0.085;
-        tCyan = 1.0;
-        tOrange = 0.72 + m * 0.22;
-        tViolet = 0.18;
-        tGlow = 0.48 + m * 0.42;
-        tSpread = 1.04 + m * 0.15;
+        tSpeed = 0.75 + m * 1.6;
+        tScale = 1.02 + m * 0.07;
+        tBand = 0.18 + m * 0.14;
+        tGlow = 0.42 + m * 0.35;
+        tTeal = 1.0;
+        tViolet = 0.45;
+        tAmber = 0.45 + m * 0.3;
         break;
       }
-      case "THINKING": {
-        tSpeed = 1.55;
-        tSwirl = 0.95;
-        tBreath = 0.024;
+      case "THINKING":
+      case "EXECUTING": {
+        tSpeed = 1.05;
         tScale = 0.99;
-        tCyan = 0.92;
-        tOrange = 0.85;
-        tViolet = 0.58;
-        tGlow = 0.48;
-        tSpread = 1.08;
+        tBand = 0.20;
+        tGlow = 0.38;
+        tTeal = 0.85;
+        tViolet = 0.92;
+        tAmber = 0.65;
         break;
       }
       case "SPEAKING": {
         const v = this.ttsLevel;
-        tSpeed = 1.1 + v * 2.6;
-        tSwirl = 0.26 + v * 0.5;
-        tBreath = 0.02 + v * 0.075;
-        tScale = 1.01 + v * 0.11;
-        tCyan = 0.88;
-        tOrange = 1.0;
-        tViolet = 0.22;
-        tGlow = 0.45 + v * 0.45;
-        tSpread = 1.05 + v * 0.22;
+        tSpeed = 0.85 + v * 1.9;
+        tScale = 1.01 + v * 0.09;
+        tBand = 0.17 + v * 0.18;
+        tGlow = 0.40 + v * 0.38;
+        tTeal = 0.75;
+        tViolet = 0.55;
+        tAmber = 1.0;
         break;
       }
-      case "EXECUTING": {
-        tSpeed = 1.7;
-        tSwirl = 0.48;
-        tBreath = 0.02;
+      case "CLARIFICATION": {
+        tSpeed = 0.55;
         tScale = 1.02;
-        tCyan = 0.98;
-        tOrange = 0.96;
-        tViolet = 0.28;
-        tGlow = 0.52;
-        tSpread = 1.1;
+        tBand = 0.16;
+        tGlow = 0.42;
+        tTeal = 0.95;
+        tViolet = 0.65;
+        tAmber = 0.85;
+        break;
+      }
+      case "ERROR": {
+        tSpeed = 0.25;
+        tScale = 0.98;
+        tBand = 0.10;
+        tGlow = 0.36;
+        tError = 1.0;
         break;
       }
       default:
@@ -140,19 +140,15 @@ class JarvisOrb {
     }
 
     const lerp = (a, b, k) => a + (b - a) * k;
-    const k = Math.min(1, dt * 6.5);
+    const k = Math.min(1, dt * 6.0);
     this.anim.speed = lerp(this.anim.speed, tSpeed, k);
-    this.anim.swirl = lerp(this.anim.swirl, tSwirl, k);
-    this.anim.breathAmp = lerp(this.anim.breathAmp, tBreath, k);
     this.anim.scale = lerp(this.anim.scale, tScale, k);
-    this.anim.cyanBoost = lerp(this.anim.cyanBoost, tCyan, k);
-    this.anim.orangeBoost = lerp(this.anim.orangeBoost, tOrange, k);
-    this.anim.violetBoost = lerp(this.anim.violetBoost, tViolet, k);
-    this.anim.glowAlpha = lerp(this.anim.glowAlpha, tGlow, k);
-    this.anim.ribbonSpread = lerp(this.anim.ribbonSpread, tSpread, k);
-
-    this.pointer.x = lerp(this.pointer.x, this.pointer.tx, Math.min(1, dt * 5));
-    this.pointer.y = lerp(this.pointer.y, this.pointer.ty, Math.min(1, dt * 5));
+    this.anim.bandAmp = lerp(this.anim.bandAmp, tBand, k);
+    this.anim.glow = lerp(this.anim.glow, tGlow, k);
+    this.anim.teal = lerp(this.anim.teal, tTeal, k);
+    this.anim.violet = lerp(this.anim.violet, tViolet, k);
+    this.anim.amber = lerp(this.anim.amber, tAmber, k);
+    this.anim.errorMix = lerp(this.anim.errorMix, tError, k);
 
     this.phase += dt * this.anim.speed;
   }
@@ -162,285 +158,119 @@ class JarvisOrb {
     const S = this.logicalSize;
     ctx.clearRect(0, 0, S, S);
 
-    const floatY = Math.sin(t * 1.35) * 6.5;
-    const breath = 1 + Math.sin(t * 2.0) * this.anim.breathAmp;
-    const cx = S / 2 + this.pointer.x * 4;
-    const cy = S / 2 + floatY + this.pointer.y * 4;
-    const R = 192 * this.anim.scale * breath;
+    const cx = S / 2;
+    const cy = S / 2;
+    const breath = this.reducedMotion ? 1.0 : 1.0 + Math.sin(t * 1.8) * 0.012;
+    const R = 152 * this.anim.scale * breath;
 
-    // 1. Soft studio floor shadow & luminous ambient aura
+    // 1. Restrained outer ambient glow
     ctx.save();
-    const shadowGrad = ctx.createRadialGradient(cx, cy + R + 36, 8, cx, cy + R + 36, R * 0.96);
-    shadowGrad.addColorStop(0, "rgba(15, 35, 70, 0.16)");
-    shadowGrad.addColorStop(0.5, "rgba(14, 165, 233, 0.08)");
-    shadowGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = shadowGrad;
+    const glowColor =
+      this.anim.errorMix > 0.5
+        ? `rgba(248, 113, 113, ${this.anim.glow * 0.45})`
+        : `rgba(56, 189, 248, ${this.anim.glow * 0.38})`;
+    const outerGrad = ctx.createRadialGradient(cx, cy, R * 0.65, cx, cy, R * 1.32);
+    outerGrad.addColorStop(0, glowColor);
+    outerGrad.addColorStop(0.6, `rgba(139, 92, 246, ${this.anim.glow * 0.14})`);
+    outerGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = outerGrad;
     ctx.beginPath();
-    ctx.ellipse(cx, cy + R + 36, R * 0.88, 26, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Dual-tone outer halo (icy cyan top-right + warm orange bottom-left)
-    const haloCyan = ctx.createRadialGradient(cx + R * 0.25, cy - R * 0.25, R * 0.45, cx, cy, R * 1.36);
-    haloCyan.addColorStop(0, `rgba(56, 189, 248, ${this.anim.glowAlpha * 0.42})`);
-    haloCyan.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = haloCyan;
-    ctx.beginPath();
-    ctx.arc(cx, cy, R * 1.36, 0, Math.PI * 2);
-    ctx.fill();
-
-    const haloOrange = ctx.createRadialGradient(cx - R * 0.25, cy + R * 0.28, R * 0.35, cx, cy, R * 1.3);
-    haloOrange.addColorStop(0, `rgba(251, 146, 60, ${this.anim.glowAlpha * 0.28})`);
-    haloOrange.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = haloOrange;
-    ctx.beginPath();
-    ctx.arc(cx, cy, R * 1.3, 0, Math.PI * 2);
+    ctx.arc(cx, cy, R * 1.32, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    // 2. Clip inside the 3D Glass Sphere
+    // 2. Dark glassy sphere body
     ctx.save();
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, Math.PI * 2);
     ctx.clip();
 
-    // Deep sapphire-navy optical core (gives dramatic 3D hollow-glass depth)
-    const coreGrad = ctx.createRadialGradient(
-      cx - R * 0.08 + this.pointer.x * 10,
-      cy - R * 0.08 + this.pointer.y * 10,
-      R * 0.06,
-      cx,
-      cy,
-      R
-    );
-    coreGrad.addColorStop(0, "#031026");
-    coreGrad.addColorStop(0.46, "#061d40");
-    coreGrad.addColorStop(0.76, "#0f3f6e");
-    coreGrad.addColorStop(0.92, "#5eb8e5");
-    coreGrad.addColorStop(1, "#dff2fe");
+    const coreGrad = ctx.createRadialGradient(cx - R * 0.22, cy - R * 0.25, R * 0.08, cx, cy, R);
+    coreGrad.addColorStop(0, "#171f2e");
+    coreGrad.addColorStop(0.55, "#0b101b");
+    coreGrad.addColorStop(0.88, "#070a12");
+    coreGrad.addColorStop(1, "#16243b");
     ctx.fillStyle = coreGrad;
-    ctx.fillRect(cx - R - 4, cy - R - 4, R * 2 + 8, R * 2 + 8);
+    ctx.fillRect(cx - R - 2, cy - R - 2, R * 2 + 4, R * 2 + 4);
 
-    // 3. Sculpted 3D-shaded Silk Ribbons sweeping inside the sphere
-    const p = this.phase;
-    const baseTilt = -0.62 + Math.sin(p * 0.32) * this.anim.swirl + (this.state === "THINKING" ? p * 0.36 : 0);
-
+    // 3. Luminous flowing band inside the dark glass (teal -> blue -> violet -> warm amber)
+    const p = this.reducedMotion ? 0.5 : this.phase;
     ctx.save();
-    ctx.translate(cx + this.pointer.x * 6, cy + this.pointer.y * 6);
-    ctx.rotate(baseTilt);
+    ctx.translate(cx, cy);
+    ctx.rotate(-0.42 + (this.state === "THINKING" && !this.reducedMotion ? p * 0.35 : Math.sin(p * 0.4) * 0.12));
 
-    // Layer A: Deep back icy-blue translucent veil
-    this._drawSculptedRibbon(ctx, R, p * 0.85, {
-      yCenter: -0.44,
-      curve: 0.34,
-      width: 0.44,
-      freq: 1.2,
-      stops: [
-        [0, `rgba(14, 165, 233, ${0.18 * this.anim.cyanBoost})`],
-        [0.45, `rgba(125, 211, 252, ${0.68 * this.anim.cyanBoost})`],
-        [0.85, "rgba(240, 249, 255, 0.88)"],
-        [1, "rgba(255, 255, 255, 0.2)"],
-      ],
-      edgeGlow: "rgba(255, 255, 255, 0.55)",
-      composite: "screen",
-    });
+    const span = R * 1.38;
+    const amp = R * this.anim.bandAmp;
+    const y1 = Math.sin(p * 1.1) * amp;
+    const y2 = Math.cos(p * 0.9 + 1.1) * amp;
 
-    // Layer B: Optional violet/indigo energy fold (prominent during THINKING)
-    if (this.anim.violetBoost > 0.1) {
-      this._drawSculptedRibbon(ctx, R, p * 1.15 + 1.6, {
-        yCenter: -0.14,
-        curve: 0.28,
-        width: 0.30,
-        freq: 1.55,
-        stops: [
-          [0, `rgba(79, 70, 229, ${0.15 * this.anim.violetBoost})`],
-          [0.5, `rgba(139, 92, 246, ${0.58 * this.anim.violetBoost})`],
-          [1, `rgba(56, 189, 248, ${0.42 * this.anim.violetBoost})`],
-        ],
-        edgeGlow: "rgba(196, 181, 253, 0.45)",
-        composite: "screen",
-      });
+    // Primary luminous band
+    const bandGrad = ctx.createLinearGradient(-span, -R * 0.2, span, R * 0.2);
+    if (this.anim.errorMix > 0.5) {
+      bandGrad.addColorStop(0, "rgba(248, 113, 113, 0.2)");
+      bandGrad.addColorStop(0.5, "rgba(245, 158, 11, 0.85)");
+      bandGrad.addColorStop(1, "rgba(239, 68, 68, 0.25)");
+    } else {
+      bandGrad.addColorStop(0, `rgba(20, 184, 166, ${0.85 * this.anim.teal})`);
+      bandGrad.addColorStop(0.35, `rgba(56, 189, 248, ${0.9 * this.anim.teal})`);
+      bandGrad.addColorStop(0.68, `rgba(139, 92, 246, ${0.85 * this.anim.violet})`);
+      bandGrad.addColorStop(1, `rgba(245, 158, 11, ${0.9 * this.anim.amber})`);
     }
 
-    // Layer C: Deep burnt-orange shadow fold (gives orange ribbon true 3D thickness)
-    this._drawSculptedRibbon(ctx, R, p * 0.92 + 0.4, {
-      yCenter: 0.34,
-      curve: -0.30,
-      width: 0.52,
-      freq: 1.15,
-      stops: [
-        [0, `rgba(154, 52, 18, ${0.45 * this.anim.orangeBoost})`],
-        [0.45, `rgba(234, 88, 12, ${0.95 * this.anim.orangeBoost})`],
-        [0.85, `rgba(249, 115, 22, ${0.90 * this.anim.orangeBoost})`],
-        [1, `rgba(254, 215, 170, ${0.75 * this.anim.orangeBoost})`],
-      ],
-      edgeGlow: "rgba(255, 237, 213, 0.55)",
-      composite: "source-over",
-    });
-
-    // Layer D: Primary luminous warm-orange silky crest
-    this._drawSculptedRibbon(ctx, R, p * 1.05 + 1.1, {
-      yCenter: 0.22,
-      curve: -0.22,
-      width: 0.34,
-      freq: 1.35,
-      stops: [
-        [0, `rgba(255, 247, 237, ${0.35 * this.anim.orangeBoost})`],
-        [0.35, `rgba(251, 146, 60, ${0.96 * this.anim.orangeBoost})`],
-        [0.72, `rgba(253, 186, 116, ${0.92 * this.anim.orangeBoost})`],
-        [1, "rgba(255, 255, 255, 0.85)"],
-      ],
-      edgeGlow: "rgba(255, 255, 255, 0.72)",
-      composite: "source-over",
-    });
-
-    // Layer E: Foreground frosted icy-cyan & pearl-white glass petal
-    this._drawSculptedRibbon(ctx, R, p * 0.78 + 2.8, {
-      yCenter: -0.28,
-      curve: 0.26,
-      width: 0.36,
-      freq: 1.18,
-      stops: [
-        [0, "rgba(255, 255, 255, 0.25)"],
-        [0.42, `rgba(186, 230, 253, ${0.84 * this.anim.cyanBoost})`],
-        [0.78, "rgba(240, 249, 255, 0.94)"],
-        [1, "rgba(255, 255, 255, 0.35)"],
-      ],
-      edgeGlow: "rgba(255, 255, 255, 0.85)",
-      composite: "screen",
-    });
-
-    // Layer F: Crisp thin white-gold crossing filament for intricate depth
-    this._drawSculptedRibbon(ctx, R, p * 1.32 + 4.1, {
-      yCenter: 0.04,
-      curve: -0.14,
-      width: 0.14,
-      freq: 1.7,
-      stops: [
-        [0, "rgba(255, 255, 255, 0.08)"],
-        [0.5, "rgba(255, 255, 255, 0.78)"],
-        [1, "rgba(186, 230, 253, 0.25)"],
-      ],
-      edgeGlow: "rgba(255, 255, 255, 0.85)",
-      composite: "screen",
-    });
-
-    ctx.restore();
-
-    // 4. Double-Walled Fresnel Glass Shell & Chromatic Rim Dispersion
-    const rimGrad = ctx.createRadialGradient(cx, cy, R * 0.68, cx, cy, R);
-    rimGrad.addColorStop(0, "rgba(255, 255, 255, 0)");
-    rimGrad.addColorStop(0.75, "rgba(186, 230, 253, 0.14)");
-    rimGrad.addColorStop(0.89, "rgba(224, 242, 254, 0.52)");
-    rimGrad.addColorStop(0.96, "rgba(255, 255, 255, 0.88)");
-    rimGrad.addColorStop(1, "rgba(186, 230, 253, 0.95)");
-    ctx.fillStyle = rimGrad;
-    ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
-
-    // Subtle warm-peach internal rim reflection on lower-left
-    const warmRim = ctx.createRadialGradient(cx - R * 0.55, cy + R * 0.45, 4, cx - R * 0.55, cy + R * 0.45, R * 0.62);
-    warmRim.addColorStop(0, `rgba(254, 215, 170, ${0.45 * this.anim.orangeBoost})`);
-    warmRim.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = warmRim;
-    ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
-
-    // Top-left crisp glass specular crescent (follows pointer slightly)
-    ctx.save();
-    ctx.translate(cx - R * 0.30 + this.pointer.x * 7, cy - R * 0.34 + this.pointer.y * 7);
-    ctx.rotate(-0.62);
-    const specGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, R * 0.50);
-    specGrad.addColorStop(0, "rgba(255, 255, 255, 0.88)");
-    specGrad.addColorStop(0.38, "rgba(240, 249, 255, 0.34)");
-    specGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = specGrad;
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle = bandGrad;
     ctx.beginPath();
-    ctx.ellipse(0, 0, R * 0.48, R * 0.18, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    // Secondary crisp bottom-right specular glint
-    ctx.save();
-    ctx.translate(cx + R * 0.36, cy + R * 0.42);
-    ctx.rotate(-0.55);
-    const glintGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, R * 0.34);
-    glintGrad.addColorStop(0, "rgba(255, 255, 255, 0.52)");
-    glintGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = glintGrad;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, R * 0.32, R * 0.10, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    ctx.restore(); // end sphere clip
-
-    // 5. Outer glass lens ring (crisp white + subtle inner glass thickness)
-    ctx.save();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-    ctx.lineWidth = 2.2;
-    ctx.beginPath();
-    ctx.arc(cx, cy, R - 0.5, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.strokeStyle = "rgba(186, 230, 253, 0.55)";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.arc(cx, cy, R - 4.5, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _drawSculptedRibbon(ctx, R, phase, opts) {
-    const spread = this.anim.ribbonSpread;
-    const yC = opts.yCenter * R * spread;
-    const curve = opts.curve * R * spread;
-    const wHalf = (opts.width * R * spread) * 0.5;
-    const span = R * 1.48;
-
-    const w1 = Math.sin(phase * opts.freq) * (R * 0.14 * spread);
-    const w2 = Math.cos(phase * opts.freq * 0.82 + 1.2) * (R * 0.14 * spread);
-    const w3 = Math.sin(phase * opts.freq * 1.15 + 2.5) * (R * 0.09 * spread);
-
-    const x0 = -span;
-    const x1 = -span * 0.36;
-    const x2 = span * 0.36;
-    const x3 = span;
-
-    const topY0 = yC + w3 - wHalf * 0.7;
-    const topY1 = yC + curve + w1 - wHalf * 1.1;
-    const topY2 = yC - curve * 0.6 - w2 - wHalf * 0.9;
-    const topY3 = yC - w3 - wHalf * 0.5;
-
-    const botY0 = yC + w3 + wHalf * 0.8;
-    const botY1 = yC + curve + w1 + wHalf * 0.95;
-    const botY2 = yC - curve * 0.6 - w2 + wHalf * 1.15;
-    const botY3 = yC - w3 + wHalf * 0.9;
-
-    ctx.save();
-    ctx.globalCompositeOperation = opts.composite || "source-over";
-
-    const grad = ctx.createLinearGradient(x0, yC - wHalf * 1.5, x3, yC + wHalf * 1.5);
-    for (const [stop, color] of opts.stops) {
-      grad.addColorStop(stop, color);
-    }
-    ctx.fillStyle = grad;
-
-    ctx.beginPath();
-    ctx.moveTo(x0, topY0);
-    ctx.bezierCurveTo(x1, topY1, x2, topY2, x3, topY3);
-    ctx.lineTo(x3, botY3);
-    ctx.bezierCurveTo(x2, botY2, x1, botY1, x0, botY0);
+    ctx.moveTo(-span, -R * 0.18);
+    ctx.bezierCurveTo(-span * 0.35, y1 - R * 0.24, span * 0.35, -y2 - R * 0.18, span, -R * 0.10);
+    ctx.lineTo(span, R * 0.16);
+    ctx.bezierCurveTo(span * 0.35, -y2 + R * 0.22, -span * 0.35, y1 + R * 0.20, -span, R * 0.12);
     ctx.closePath();
     ctx.fill();
 
-    // Luminous silk ridge highlight along top edge
-    if (opts.edgeGlow) {
-      ctx.strokeStyle = opts.edgeGlow;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.moveTo(x0, topY0);
-      ctx.bezierCurveTo(x1, topY1, x2, topY2, x3, topY3);
-      ctx.stroke();
-    }
+    // Subtle secondary core filament
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.42)";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-span, 0);
+    ctx.bezierCurveTo(-span * 0.35, y1 * 0.7, span * 0.35, -y2 * 0.7, span, 0);
+    ctx.stroke();
 
+    ctx.restore();
+
+    // 4. Glass rim refraction & specular arc
+    const rimGrad = ctx.createRadialGradient(cx, cy, R * 0.76, cx, cy, R);
+    rimGrad.addColorStop(0, "rgba(255, 255, 255, 0)");
+    rimGrad.addColorStop(0.88, "rgba(148, 163, 184, 0.14)");
+    rimGrad.addColorStop(1, "rgba(255, 255, 255, 0.38)");
+    ctx.fillStyle = rimGrad;
+    ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+    ctx.save();
+    ctx.translate(cx - R * 0.32, cy - R * 0.34);
+    ctx.rotate(-0.6);
+    const spec = ctx.createRadialGradient(0, 0, 2, 0, 0, R * 0.44);
+    spec.addColorStop(0, "rgba(255, 255, 255, 0.42)");
+    spec.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = spec;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, R * 0.42, R * 0.14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.restore(); // end clip
+
+    // Crisp outer glass edge
+    ctx.save();
+    ctx.strokeStyle =
+      this.state === "LISTENING"
+        ? "rgba(56, 189, 248, 0.75)"
+        : this.state === "ERROR"
+        ? "rgba(248, 113, 113, 0.75)"
+        : "rgba(255, 255, 255, 0.24)";
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R - 0.5, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
   }
 }
